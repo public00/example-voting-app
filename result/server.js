@@ -6,6 +6,12 @@ var express = require('express'),
     server = require('http').Server(app),
     io = require('socket.io')(server);
 
+    const winston = require('winston');
+    const logger = winston.createLogger({
+      format: winston.format.json(),
+      transports: [new winston.transports.Console()],
+    });
+
 var port = process.env.PORT || 4000;
 
 io.on('connection', function (socket) {
@@ -35,7 +41,7 @@ async.retry(
     if (err) {
       return console.error("Giving up");
     }
-    console.log("Connected to db");
+    logger.info("Connected to database", { service: "result-app", attempt: retryCount });
     getVotes(client);
   }
 );

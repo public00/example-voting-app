@@ -6,6 +6,8 @@ using System.Net.Sockets;
 using System.Threading;
 using Newtonsoft.Json;
 using Npgsql;
+using Serilog;
+using Serilog.Formatting.Json;
 using StackExchange.Redis;
 
 namespace Worker
@@ -19,6 +21,10 @@ namespace Worker
                 var pgsql = OpenDbConnection("Server=db;Username=postgres;Password=postgres;");
                 var redisConn = OpenRedisConnection("redis");
                 var redis = redisConn.GetDatabase();
+
+                Log.Logger = new LoggerConfiguration()
+                    .WriteTo.Console(new JsonFormatter())
+                    .CreateLogger();
 
                 // Keep alive is not implemented in Npgsql yet. This workaround was recommended:
                 // https://github.com/npgsql/npgsql/issues/1214#issuecomment-235828359
@@ -41,7 +47,7 @@ namespace Worker
                     if (json != null)
                     {
                         var vote = JsonConvert.DeserializeAnonymousType(json, definition);
-                        Console.WriteLine($"Processing vote for '{vote.vote}' by '{vote.voter_id}'");
+                        Log.Information("Processing vote for {VoteChoice} by {VoterId}", vote.vote, vote.voter_id);
                         // Reconnect DB if down
                         if (!pgsql.State.Equals(System.Data.ConnectionState.Open))
                         {

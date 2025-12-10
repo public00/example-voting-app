@@ -1,5 +1,6 @@
-from flask import Flask, render_template, request, make_response, g
+from flask import Flask, jsonify, render_template, request, make_response, g
 from redis import Redis
+from pythonjsonlogger import jsonlogger
 import os
 import socket
 import random
@@ -12,6 +13,11 @@ hostname = socket.gethostname()
 
 app = Flask(__name__)
 
+logHandler = logging.StreamHandler()
+formatter = jsonlogger.JsonFormatter('%(asctime)s %(levelname)s %(message)s')
+logHandler.setFormatter(formatter)
+app.logger.addHandler(logHandler)
+
 gunicorn_error_logger = logging.getLogger('gunicorn.error')
 app.logger.handlers.extend(gunicorn_error_logger.handlers)
 app.logger.setLevel(logging.INFO)
@@ -21,6 +27,42 @@ def get_redis():
         g.redis = Redis(host="redis", db=0, socket_timeout=5)
     return g.redis
 
+@app.route("/health")
+def health():
+    try:
+        # Actually try to talk to Redis
+        redis = get_redis()
+        redis.ping()
+        return "OK", 200
+    except Exception as e:
+        app.logger.error("Health check failed", extra={'error': str(e)})
+        return "Unhealthy", 500
+
+@app.route("/api/vote", methods=['POST'])
+def cast_vote_api():
+    try:
+        voter_id = request.cookies.get('voter_id')
+        if not voter_id:
+            voter_id = hex(random.getrandbits(64))[2:-1]
+
+        # Get the JSON body
+        content = request.json
+        vote = content['vote']
+
+        app.logger.info('Vote received via API', extra={'vote': vote, 'voter_id': voter_id})
+
+        redis = get_redis()
+        data = json.dumps({'voter_id': voter_id, 'vote': vote})
+        redis.rpush('votes', data)
+
+        resp = jsonify(success=True, message="Vote cast")
+        resp.set_cookie('voter_id', voter_id)
+        return resp, 200
+
+    except Exception as e:
+        app.logger.error("API Error", extra={'error': str(e)})
+        return jsonify(success=False, error="Internal Server Error"), 500
+    
 @app.route("/", methods=['POST','GET'])
 def hello():
     voter_id = request.cookies.get('voter_id')
@@ -32,7 +74,7 @@ def hello():
     if request.method == 'POST':
         redis = get_redis()
         vote = request.form['vote']
-        app.logger.info('Received vote for %s', vote)
+        app.logger.info('Vote received', extra={'vote_choice': vote, 'voter_id': voter_id, 'app': 'vote-frontend'})
         data = json.dumps({'voter_id': voter_id, 'vote': vote})
         redis.rpush('votes', data)
 
