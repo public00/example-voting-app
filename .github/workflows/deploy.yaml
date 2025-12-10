@@ -1,0 +1,40 @@
+name: Deploy to AKS
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      # Checkout the code
+      - uses: actions/checkout@v4
+
+      # Log in to Azure (using the Secret)
+      - uses: azure/login@v1
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      # Connect to AKS Cluster
+      - uses: azure/aks-set-context@v3
+        with:
+          resource-group: VotingApp
+          cluster-name: voting-app-cluster
+
+      # Deploy the App (Manifests)
+      - name: Deploy to Kubernetes
+        uses: Azure/k8s-deploy@v4
+        with:
+          action: deploy
+          manifests: |
+            k8s-specifications/db-deployment.yaml
+            k8s-specifications/db-service.yaml
+            k8s-specifications/redis-deployment.yaml
+            k8s-specifications/redis-service.yaml
+            k8s-specifications/worker-deployment.yaml
+            k8s-specifications/vote-deployment.yaml
+            k8s-specifications/vote-service.yaml
+            k8s-specifications/result-deployment.yaml
+            k8s-specifications/result-service.yaml
