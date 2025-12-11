@@ -15,7 +15,7 @@ spec:
         app: worker
     spec:
       containers:
-      - image: dockersamples/examplevotingapp_worker
+      - image: vedranregistry99.azurecr.io/worker
         name: worker
       imagePullSecrets:
       - name: acr-secret

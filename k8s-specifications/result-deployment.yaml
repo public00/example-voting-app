@@ -15,7 +15,7 @@ spec:
         app: result
     spec:
       containers:
-      - image: dockersamples/examplevotingapp_result
+      - image: vedranregistry99.azurecr.io/result
         name: result
         ports:
         - containerPort: 80
