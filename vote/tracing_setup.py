@@ -1,10 +1,10 @@
 from opentelemetry import trace
 from opentelemetry.trace import get_tracer
-import logging # Added logging dependency
+import logging 
 
 # Setup a dedicated logger for troubleshooting tracing issues
 trace_logger = logging.getLogger('tracing_debug')
-trace_logger.setLevel(logging.info)
+trace_logger.setLevel(logging.INFO) 
 
 # Initialize a tracer instance. This relies on the Dynatrace OneAgent
 # We assume the Python logging framework is already configured in app.py
@@ -50,4 +50,4 @@ def start_trace_span(span_name, kind=trace.SpanKind.SERVER):
     else:
         trace_logger.error(f"Span '{span_name}' started, but context is invalid. Agent integration failure suspected.")
         
-    return span 
+    return span
