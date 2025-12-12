@@ -48,6 +48,7 @@ namespace Worker
                     {
                         var vote = JsonConvert.DeserializeAnonymousType(json, definition);
 
+                        // Start Distributed Trace Activity
                         // We use the W3C 'traceparent' passed from Python
                         using (var activity = new Activity("ProcessingVote"))
                         {
@@ -57,8 +58,10 @@ namespace Worker
                             }
                             activity.Start();
 
-                            // Dynatrace OneAgent will now auto-enrich this log with the correct TraceID.
-                            Log.Information("Processing vote for {VoteChoice} by {VoterId}", vote.vote, vote.voter_id);
+                            // Explicitly add Activity/Trace ID to Log context
+                            Log.ForContext("traceId", activity.TraceId.ToString())
+                               .ForContext("spanId", activity.SpanId.ToString())
+                               .Information("Processing vote for {VoteChoice} by {VoterId}", vote.vote, vote.voter_id);
 
                             if (!pgsql.State.Equals(System.Data.ConnectionState.Open))
                             {
