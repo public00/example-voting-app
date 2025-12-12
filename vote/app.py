@@ -50,7 +50,7 @@ def cast_vote_api():
         # Capture Trace Context
         traceparent = request.headers.get('traceparent')
 
-        app.logger.info('Vote received via API', extra={
+        app.logger.info('Vote received via API!', extra={
             'vote': vote, 
             'voter_id': voter_id,
             'traceparent': traceparent 
