@@ -5,7 +5,7 @@ metadata:
     app: vote
   name: vote
 spec:
-  replicas: 1
+  replicas: 2  # High Availability - chaos testing
   selector:
     matchLabels:
       app: vote
@@ -19,6 +19,13 @@ spec:
         name: vote
         ports:
         - containerPort: 80
-          name: result
+          name: vote
+        resources:
+          requests:
+            cpu: "100m"
+            memory: "128Mi"
+          limits:
+            cpu: "250m"
+            memory: "256Mi"
       imagePullSecrets:
       - name: acr-secret
