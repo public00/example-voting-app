@@ -6,8 +6,27 @@ import socket
 import random
 import json
 import logging
+import time
 
-from tracing_setup import get_current_traceparent, start_trace_span
+# --- Code-Level Resilience: Fail-Safe Import ---
+try:
+    # This module contains the tracing logic that uses opentelemetry
+    from tracing_setup import get_current_traceparent, start_trace_span
+except ImportError as e:
+    # If tracing dependencies are missing (like during a Docker build error), 
+    # we create dummy functions so the application runs without crashing.
+    print(f"FATAL: Tracing setup failed: {e}. Running without distributed tracing.")
+    
+    # Define placeholder functions for graceful degradation
+    def get_current_traceparent(): return None
+    def start_trace_span(span_name, kind=None):
+        class DummySpan:
+            def __enter__(self): return None
+            def __exit__(self, exc_type, exc_val, exc_tb): pass
+            def record_exception(self, e): pass
+            def set_attribute(self, key, value): pass
+        return DummySpan()
+# ----------------------------------------------------
 
 option_a = os.getenv('OPTION_A', "Cats")
 option_b = os.getenv('OPTION_B', "Dogs")
