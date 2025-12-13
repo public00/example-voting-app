@@ -1,31 +1,24 @@
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  labels:
-    app: worker
-  name: worker
+# worker-deployment.yaml snippet
 spec:
-  replicas: 1
-  selector:
-    matchLabels:
-      app: worker
   template:
-    metadata:
-      labels:
-        app: worker
-      annotations:
-        oneagent.dynatrace.com/inject: "false"
+    # ...
     spec:
       containers:
       - image: vedranregistry99.azurecr.io/worker
         name: worker
         
-        resources:
-          requests:
-            cpu: "100m"
-            memory: "128Mi"
-          limits:
-            cpu: "200m"
-            memory: "256Mi"
-      imagePullSecrets:
-      - name: acr-secret
+        env:
+        - name: DT_ENDPOINT_URL
+          valueFrom:
+            secretKeyRef:
+              # Must match the name you found: dynatrace-otel-secrets
+              name: dynatrace-otel-secrets 
+              key: endpoint_url 
+              
+        - name: DT_AUTH_TOKEN
+          valueFrom:
+            secretKeyRef:
+              # Must match the name you found: dynatrace-otel-secrets
+              name: dynatrace-otel-secrets
+              key: api_token
+      
