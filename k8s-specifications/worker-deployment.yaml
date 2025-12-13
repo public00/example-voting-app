@@ -13,24 +13,12 @@ spec:
     metadata:
       labels:
         app: worker
+      annotations:
+        oneagent.dynatrace.com/inject: "false"
     spec:
-      # --- RESTORED: CSI Volume for OneAgent Injection ---
-      volumes:
-      - name: dynatrace-oneagent
-        csi:
-          driver: csi.dynatrace.com 
-          readOnly: true
-          volumeAttributes:
-            tenant: "dynatrace" 
-
       containers:
       - image: vedranregistry99.azurecr.io/worker
         name: worker
-        
-        volumeMounts:
-        - name: dynatrace-oneagent
-          mountPath: /opt/dynatrace/oneagent
-        
         
         resources:
           requests:

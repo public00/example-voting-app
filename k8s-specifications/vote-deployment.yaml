@@ -13,29 +13,16 @@ spec:
     metadata:
       labels:
         app: vote
+      annotations:
+        oneagent.dynatrace.com/inject: "false"
     spec:
-      # --- RESTORED: CSI Volume for OneAgent Injection ---
-      volumes:
-      - name: dynatrace-oneagent
-        csi:
-          driver: csi.dynatrace.com 
-          readOnly: true
-          volumeAttributes:
-            tenant: "dynatrace" 
-
+      
       containers:
       - image: vedranregistry99.azurecr.io/vote
         name: vote
         ports:
         - containerPort: 80
           name: vote
-          
-        volumeMounts:
-        - name: dynatrace-oneagent
-          mountPath: /opt/dynatrace/oneagent
-        
-        # --- REMOVED: OTLP Secret Env Vars (OneAgent handles connection) ---
-        # env: (block removed)
         
         resources:
           requests:
