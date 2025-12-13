@@ -1,11 +1,14 @@
 using System;
 using System.Data.Common;
+using System.Diagnostics; // Required for Activity and ActivityContext
 using System.Linq;
 using System.Net;
 using System.Net.Sockets;
 using System.Threading;
 using Newtonsoft.Json;
 using Npgsql;
+using Serilog;
+using Serilog.Formatting.Json;
 using StackExchange.Redis;
 
 namespace Worker
@@ -14,43 +17,96 @@ namespace Worker
     {
         public static int Main(string[] args)
         {
+            // -------------------------------
+            // Serilog setup
+            // -------------------------------
+            Log.Logger = new LoggerConfiguration()
+                .WriteTo.Console(new JsonFormatter())
+                .CreateLogger();
+
             try
             {
+                // -------------------------------
+                // Worker infrastructure
+                // -------------------------------
                 var pgsql = OpenDbConnection("Server=db;Username=postgres;Password=postgres;");
                 var redisConn = OpenRedisConnection("redis");
                 var redis = redisConn.GetDatabase();
 
-                // Keep alive is not implemented in Npgsql yet. This workaround was recommended:
-                // https://github.com/npgsql/npgsql/issues/1214#issuecomment-235828359
                 var keepAliveCommand = pgsql.CreateCommand();
                 keepAliveCommand.CommandText = "SELECT 1";
 
-                var definition = new { vote = "", voter_id = "" };
+                // Ensure the anonymous type definition includes the 'traceparent' field
+                var definition = new { vote = "", voter_id = "", traceparent = "" };
+
+                // -------------------------------
+                // Main worker loop
+                // -------------------------------
                 while (true)
                 {
-                    // Slow down to prevent CPU spike, only query each 100ms
                     Thread.Sleep(100);
 
-                    // Reconnect redis if down
-                    if (redisConn == null || !redisConn.IsConnected) {
+                    if (redisConn == null || !redisConn.IsConnected)
+                    {
                         Console.WriteLine("Reconnecting Redis");
                         redisConn = OpenRedisConnection("redis");
                         redis = redisConn.GetDatabase();
                     }
+
                     string json = redis.ListLeftPopAsync("votes").Result;
+
                     if (json != null)
                     {
                         var vote = JsonConvert.DeserializeAnonymousType(json, definition);
-                        Console.WriteLine($"Processing vote for '{vote.vote}' by '{vote.voter_id}'");
-                        // Reconnect DB if down
-                        if (!pgsql.State.Equals(System.Data.ConnectionState.Open))
+
+                        // -------------------------------
+                        // Start worker Activity (Span)
+                        // -------------------------------
+                        using (var activity = new Activity("Worker.ProcessVote"))
                         {
-                            Console.WriteLine("Reconnecting DB");
-                            pgsql = OpenDbConnection("Server=db;Username=postgres;Password=postgres;");
-                        }
-                        else
-                        { // Normal +1 vote requested
-                            UpdateVote(pgsql, vote.voter_id, vote.vote);
+                            // --- FINAL CRITICAL FIX: Direct W3C Header Injection ---
+                            if (!string.IsNullOrEmpty(vote.traceparent))
+                            {
+                                try 
+                                {
+                                    // SetParentId(string) attempts to parse the W3C traceparent header 
+                                    // and set the current Activity's TraceId and ParentSpanId.
+                                    activity.SetParentId(vote.traceparent);
+                                }
+                                catch (Exception ex)
+                                {
+                                     // If linking fails (e.g., malformed header), log the failure.
+                                     // The activity will proceed and start a new root trace, 
+                                     // which is better than crashing.
+                                     Log.Error(ex, "Failed to set parent trace ID from Redis payload: {Traceparent}", vote.traceparent);
+                                }
+                            }
+                            // ---------------------------------------------------------
+                            
+                            activity.Start(); // Start the span.
+
+                            // Log context - The TraceId here MUST now match the Python Trace ID.
+                            Log.ForContext("traceId", activity.TraceId.ToString())
+                               .ForContext("spanId", activity.SpanId.ToString())
+                               .Information(
+                                   "Processing vote for {VoteChoice} by {VoterId}",
+                                   vote.vote,
+                                   vote.voter_id
+                               );
+
+                            if (!pgsql.State.Equals(System.Data.ConnectionState.Open))
+                            {
+                                Console.WriteLine("Reconnecting DB");
+                                pgsql = OpenDbConnection(
+                                    "Server=db;Username=postgres;Password=postgres;"
+                                );
+                            }
+                            else
+                            {
+                                UpdateVote(pgsql, vote.voter_id, vote.vote);
+                            }
+                            
+                            activity.Stop(); // Stop the span.
                         }
                     }
                     else
@@ -66,6 +122,10 @@ namespace Worker
             }
         }
 
+        // -------------------------------------------------
+        // Helpers (Unchanged)
+        // -------------------------------------------------
+
         private static NpgsqlConnection OpenDbConnection(string connectionString)
         {
             NpgsqlConnection connection;
@@ -78,12 +138,7 @@ namespace Worker
                     connection.Open();
                     break;
                 }
-                catch (SocketException)
-                {
-                    Console.Error.WriteLine("Waiting for db");
-                    Thread.Sleep(1000);
-                }
-                catch (DbException)
+                catch (Exception)
                 {
                     Console.Error.WriteLine("Waiting for db");
                     Thread.Sleep(1000);
@@ -104,7 +159,6 @@ namespace Worker
 
         private static ConnectionMultiplexer OpenRedisConnection(string hostname)
         {
-            // Use IP address to workaround https://github.com/StackExchange/StackExchange.Redis/issues/410
             var ipAddress = GetIp(hostname);
             Console.WriteLine($"Found redis at {ipAddress}");
 
@@ -130,19 +184,25 @@ namespace Worker
                 .First(a => a.AddressFamily == AddressFamily.InterNetwork)
                 .ToString();
 
-        private static void UpdateVote(NpgsqlConnection connection, string voterId, string vote)
+        private static void UpdateVote(
+            NpgsqlConnection connection,
+            string voterId,
+            string vote)
         {
             var command = connection.CreateCommand();
+
             try
             {
-                command.CommandText = "INSERT INTO votes (id, vote) VALUES (@id, @vote)";
+                command.CommandText =
+                    "INSERT INTO votes (id, vote) VALUES (@id, @vote)";
                 command.Parameters.AddWithValue("@id", voterId);
                 command.Parameters.AddWithValue("@vote", vote);
                 command.ExecuteNonQuery();
             }
             catch (DbException)
             {
-                command.CommandText = "UPDATE votes SET vote = @vote WHERE id = @id";
+                command.CommandText =
+                    "UPDATE votes SET vote = @vote WHERE id = @id";
                 command.ExecuteNonQuery();
             }
             finally

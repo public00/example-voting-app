@@ -5,7 +5,12 @@ metadata:
     app: result
   name: result
 spec:
-  replicas: 1
+  replicas: 2
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 0
+      maxUnavailable: 1
   selector:
     matchLabels:
       app: result
@@ -14,9 +19,34 @@ spec:
       labels:
         app: result
     spec:
+      # --- KEEP: Defines the volume source for the CSI driver ---
+      volumes:
+      - name: dynatrace-oneagent
+        csi:
+          driver: csi.dynatrace.com 
+          readOnly: true
+          volumeAttributes:
+            tenant: "dynatrace" 
+      # --------------------------------------------------------
+
       containers:
-      - image: dockersamples/examplevotingapp_result
+      - image: vedranregistry99.azurecr.io/result
         name: result
         ports:
         - containerPort: 80
           name: result
+        env:
+        - name: POSTGRES_CONNECTION_STRING
+          value: "postgres://postgres:postgres@db-0.db/postgres"
+        
+        # --- REMOVED: The manual volumeMounts section to avoid duplication error ---
+        
+        resources:
+          requests:
+            cpu: "100m"
+            memory: "256Mi"
+          limits:
+            cpu: "250m"
+            memory: "256Mi"
+      imagePullSecrets:
+      - name: acr-secret

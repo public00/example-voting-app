@@ -2,14 +2,20 @@ var express = require('express'),
     async = require('async'),
     { Pool } = require('pg'),
     cookieParser = require('cookie-parser'),
+    path = require('path'), // <--- FIX: Added missing import
     app = express(),
     server = require('http').Server(app),
     io = require('socket.io')(server);
 
+const winston = require('winston');
+const logger = winston.createLogger({
+  format: winston.format.json(),
+  transports: [new winston.transports.Console()],
+});
+
 var port = process.env.PORT || 4000;
 
 io.on('connection', function (socket) {
-
   socket.emit('message', { text : 'Welcome!' });
 
   socket.on('subscribe', function (data) {
@@ -17,8 +23,10 @@ io.on('connection', function (socket) {
   });
 });
 
+var connectionString = process.env.POSTGRES_CONNECTION_STRING || 'postgres://postgres:postgres@db/postgres';
+
 var pool = new Pool({
-  connectionString: 'postgres://postgres:postgres@db/postgres'
+  connectionString: connectionString
 });
 
 async.retry(
@@ -26,16 +34,16 @@ async.retry(
   function(callback) {
     pool.connect(function(err, client, done) {
       if (err) {
-        console.error("Waiting for db");
+        logger.error("Waiting for db", { error: err.message });
       }
       callback(err, client);
     });
   },
   function(err, client) {
     if (err) {
-      return console.error("Giving up");
+      return logger.error("Giving up", { error: err.message });
     }
-    console.log("Connected to db");
+    logger.info("Connected to database", { service: "result-app" });
     getVotes(client);
   }
 );
@@ -43,13 +51,13 @@ async.retry(
 function getVotes(client) {
   client.query('SELECT vote, COUNT(id) AS count FROM votes GROUP BY vote', [], function(err, result) {
     if (err) {
-      console.error("Error performing query: " + err);
+      logger.error("Error performing query", { error: err.message });
     } else {
       var votes = collectVotesFromResult(result);
       io.sockets.emit("scores", JSON.stringify(votes));
     }
 
-    setTimeout(function() {getVotes(client) }, 1000);
+    setTimeout(function() { getVotes(client) }, 1000);
   });
 }
 
@@ -64,7 +72,7 @@ function collectVotesFromResult(result) {
 }
 
 app.use(cookieParser());
-app.use(express.urlencoded());
+app.use(express.urlencoded({ extended: true }));
 app.use(express.static(__dirname + '/views'));
 
 app.get('/', function (req, res) {
@@ -73,5 +81,5 @@ app.get('/', function (req, res) {
 
 server.listen(port, function () {
   var port = server.address().port;
-  console.log('App running on port ' + port);
+  logger.info('App running', { port: port });
 });

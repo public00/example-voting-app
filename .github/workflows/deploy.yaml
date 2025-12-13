@@ -1,36 +1,151 @@
-name: Deploy to AKS
+name: Build and Deploy
 
 on:
   push:
     branches: [ main, master ]
   workflow_dispatch:
 
+env:
+  ACR_NAME: vedranregistry99
+
 jobs:
-  deploy:
+  # ---------------------------------------------------
+  # JOB 1: QUALITY & TESTS
+  # ---------------------------------------------------
+  test:
     runs-on: ubuntu-latest
     steps:
-      # Checkout the code
+      - uses: actions/checkout@v4
+      
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+          
+      - name: Install Dependencies
+        run: |
+          pip install pytest flask redis flake8
+          if [ -f vote/requirements.txt ]; then pip install -r vote/requirements.txt; fi
+
+      # [NEW] LINTING STEP
+      # Checks for syntax errors and style issues in the Python code
+      - name: Lint with Flake8
+        run: |
+          # stop the build if there are Python syntax errors or undefined names
+          flake8 vote/ --count --select=E9,F63,F7,F82 --show-source --statistics
+          # exit-zero treats all errors as warnings. The GitHub editor is 127 chars wide
+          flake8 vote/ --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
+
+      # Run Unit Tests
+      - name: Run Unit Tests
+        run: |
+          export REDIS_HOST=localhost 
+          # Only run if the test file actually exists
+          if [ -f vote/test_app.py ]; then pytest vote/test_app.py; fi
+
+  # ---------------------------------------------------
+  # JOB 2: BUILD & SECURITY SCAN
+  # ---------------------------------------------------
+  build:
+    runs-on: ubuntu-latest
+    needs: test  # Only build if tests pass
+    steps:
+      - uses: actions/checkout@v4
+      
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.ACR_NAME }}.azurecr.io
+          username: ${{ secrets.ACR_USERNAME }}
+          password: ${{ secrets.ACR_PASSWORD }}
+
+      # --- VOTE APP ---
+      # 1. Build locally first to scan it
+      - name: Build Vote (Pre-Scan)
+        uses: docker/build-push-action@v5
+        with:
+          context: ./vote
+          push: false
+          tags: ${{ env.ACR_NAME }}.azurecr.io/vote:${{ github.sha }}
+
+      # 2. [NEW] Security Scan with Trivy
+      - name: Security Scan (Vote)
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: '${{ env.ACR_NAME }}.azurecr.io/vote:${{ github.sha }}'
+          format: 'table'
+          # exit-code: '1' # Uncomment this to Fail the build on critical bugs
+          ignore-unfixed: true
+          severity: 'CRITICAL,HIGH'
+
+      # 3. Push to Registry (Only if scan "passes" or we ignore it)
+      - name: Push Vote
+        uses: docker/build-push-action@v5
+        with:
+          context: ./vote
+          push: true
+          tags: ${{ env.ACR_NAME }}.azurecr.io/vote:${{ github.sha }}
+
+      # --- RESULT APP ---
+      - name: Build Result (Pre-Scan)
+        uses: docker/build-push-action@v5
+        with:
+          context: ./result
+          push: false
+          tags: ${{ env.ACR_NAME }}.azurecr.io/result:${{ github.sha }}
+
+      - name: Security Scan (Result)
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: '${{ env.ACR_NAME }}.azurecr.io/result:${{ github.sha }}'
+          format: 'table'
+          ignore-unfixed: true
+          severity: 'CRITICAL,HIGH'
+
+      - name: Push Result
+        uses: docker/build-push-action@v5
+        with:
+          context: ./result
+          push: true
+          tags: ${{ env.ACR_NAME }}.azurecr.io/result:${{ github.sha }}
+
+      # --- WORKER APP ---
+      # (Worker is skipped for scanning to save time, but follows same pattern)
+      - name: Build and Push Worker
+        uses: docker/build-push-action@v5
+        with:
+          context: ./worker
+          push: true
+          tags: ${{ env.ACR_NAME }}.azurecr.io/worker:${{ github.sha }}
+
+  # ---------------------------------------------------
+  # JOB 3: DEPLOY TO AKS
+  # ---------------------------------------------------
+  deploy:
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
       - uses: actions/checkout@v4
 
-      # Log in to Azure (using the Secret)
-      - uses: azure/login@v1
+      - uses: azure/login@v2
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
 
-      # Connect to AKS Cluster
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.ACR_NAME }}.azurecr.io
+          username: ${{ secrets.ACR_USERNAME }}
+          password: ${{ secrets.ACR_PASSWORD }}
+
       - uses: azure/aks-set-context@v3
         with:
           resource-group: VotingApp
-          cluster-name: voting-app-cluster
+          cluster-name: VotingAppCluster
 
-      # Deploy the App (Manifests)
       - name: Deploy to Kubernetes
         uses: Azure/k8s-deploy@v4
         with:
           action: deploy
           manifests: |
-            k8s-specifications/db-deployment.yaml
-            k8s-specifications/db-service.yaml
             k8s-specifications/redis-deployment.yaml
             k8s-specifications/redis-service.yaml
             k8s-specifications/worker-deployment.yaml
@@ -38,3 +153,13 @@ jobs:
             k8s-specifications/vote-service.yaml
             k8s-specifications/result-deployment.yaml
             k8s-specifications/result-service.yaml
+            k8s-specifications/db-statefulset.yaml
+            k8s-specifications/db-service-headless.yaml
+            k8s-specifications/policy-deny-all.yaml
+            k8s-specifications/policy-allow-vote-redis.yaml
+            k8s-specifications/policy-allow-worker.yaml
+            k8s-specifications/policy-allow-result-db.yaml
+          images: |
+            ${{ env.ACR_NAME }}.azurecr.io/vote:${{ github.sha }}
+            ${{ env.ACR_NAME }}.azurecr.io/result:${{ github.sha }}
+            ${{ env.ACR_NAME }}.azurecr.io/worker:${{ github.sha }}

@@ -14,6 +14,28 @@ spec:
       labels:
         app: worker
     spec:
+      # --- KEEP: Defines the volume source for the CSI driver ---
+      volumes:
+      - name: dynatrace-oneagent
+        csi:
+          driver: csi.dynatrace.com 
+          readOnly: true
+          volumeAttributes:
+            tenant: "dynatrace" 
+      # --------------------------------------------------------
+
       containers:
-      - image: dockersamples/examplevotingapp_worker
+      - image: vedranregistry99.azurecr.io/worker
         name: worker
+        
+        # --- REMOVED: The manual volumeMounts section to avoid duplication error ---
+        
+        resources:
+          requests:
+            cpu: "100m"
+            memory: "128Mi"
+          limits:
+            cpu: "200m"
+            memory: "256Mi"
+      imagePullSecrets:
+      - name: acr-secret

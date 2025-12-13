@@ -5,7 +5,7 @@ metadata:
     app: vote
   name: vote
 spec:
-  replicas: 1
+  replicas: 2
   selector:
     matchLabels:
       app: vote
@@ -14,9 +14,31 @@ spec:
       labels:
         app: vote
     spec:
+      # --- KEEP: Defines the volume source for the CSI driver ---
+      volumes:
+      - name: dynatrace-oneagent
+        csi:
+          driver: csi.dynatrace.com 
+          readOnly: true
+          volumeAttributes:
+            tenant: "dynatrace" 
+      # --------------------------------------------------------
+
       containers:
-      - image: dockersamples/examplevotingapp_vote
+      - image: vedranregistry99.azurecr.io/vote
         name: vote
         ports:
         - containerPort: 80
           name: vote
+        
+        # --- REMOVED: The manual volumeMounts section to avoid duplication error ---
+        
+        resources:
+          requests:
+            cpu: "100m"
+            memory: "256Mi"
+          limits:
+            cpu: "200m"
+            memory: "256Mi"
+      imagePullSecrets:
+      - name: acr-secret
