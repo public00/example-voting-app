@@ -1,6 +1,6 @@
 using System;
 using System.Data.Common;
-using System.Diagnostics; 
+using System.Diagnostics;
 using System.Linq;
 using System.Net;
 using System.Net.Sockets;
@@ -11,39 +11,47 @@ using Serilog;
 using Serilog.Formatting.Json;
 using StackExchange.Redis;
 
-// NEW OpenTelemetry Usings
+// OpenTelemetry
+using OpenTelemetry;
 using OpenTelemetry.Trace;
-using OpenTelemetry.Exporter;
 using OpenTelemetry.Resources;
+using OpenTelemetry.Exporter;
+using OpenTelemetry.Instrumentation.SqlClient;
 
 
 namespace Worker
 {
     public class Program
     {
+        private static readonly ActivitySource ActivitySource =
+            new ActivitySource("Worker.ProcessVote");
+
         public static int Main(string[] args)
         {
-           
-           var endpointUrl = Environment.GetEnvironmentVariable("DT_ENDPOINT_URL");
+            var endpointUrl = Environment.GetEnvironmentVariable("DT_ENDPOINT_URL");
             var apiToken = Environment.GetEnvironmentVariable("DT_API_TOKEN");
-            using var tracerProvider = Sdk.CreateTracerProviderBuilder()
-                .AddSource("Worker.ProcessVote") 
-                .SetResourceBuilder(ResourceBuilder.CreateDefault()
-                    .AddService("Worker-Service") 
-                )
-                // Add instrumentation for standard libraries
-                .AddHttpClientInstrumentation() 
-                
-                // Add the OTLP Exporter
-                .AddOtlpExporter(opt =>
-                {
-                    opt.Endpoint = endpoint; 
-                    opt.Protocol = OtlpExportProtocol.HttpProtobuf;
-                    opt.Headers = token;
-                })
-                .Build();
-            // ----------------------------------------
-            
+
+            using var tracerProvider =
+                Sdk.CreateTracerProviderBuilder()
+                   .AddSource("Worker.ProcessVote")
+                   .SetResourceBuilder(
+                        ResourceBuilder.CreateDefault()
+                            .AddService(serviceName: "Worker-Service"))
+                   .AddHttpClientInstrumentation()
+                   .AddSqlClientInstrumentation(options =>
+                   {
+                       options.SetDbStatementForText = true;
+                       options.RecordException = true;
+                   })
+                   .AddRedisInstrumentation()
+                   .AddOtlpExporter(opt =>
+                   {
+                       opt.Endpoint = new Uri(endpointUrl);
+                       opt.Protocol = OtlpExportProtocol.HttpProtobuf;
+                       opt.Headers = $"Authorization=Api-Token {apiToken}";
+                   })
+                   .Build();
+
             // -------------------------------
             // Serilog setup
             // -------------------------------
@@ -63,7 +71,6 @@ namespace Worker
                 var keepAliveCommand = pgsql.CreateCommand();
                 keepAliveCommand.CommandText = "SELECT 1";
 
-                // Ensure the anonymous type definition includes the 'traceparent' field
                 var definition = new { vote = "", voter_id = "", traceparent = "" };
 
                 // -------------------------------
@@ -86,47 +93,42 @@ namespace Worker
                     {
                         var vote = JsonConvert.DeserializeAnonymousType(json, definition);
 
-                        // Use the ActivitySource defined above ("Worker.ProcessVote") to create the Activity
-                        var activitySource = new ActivitySource("Worker.ProcessVote");
+                        using var activity =
+                            ActivitySource.StartActivity(
+                                "ProcessVoteFromQueue",
+                                ActivityKind.Consumer);
 
-                        using (var activity = activitySource.StartActivity("ProcessVoteFromQueue", ActivityKind.Consumer))
+                        if (!string.IsNullOrEmpty(vote.traceparent))
                         {
-                            // --- CRITICAL FIX: Direct W3C Header Injection ---
-                            if (!string.IsNullOrEmpty(vote.traceparent))
+                            try
                             {
-                                try 
-                                {
-                                    // SetParentId(string) attempts to parse the W3C traceparent header 
-                                    // and set the current Activity's TraceId and ParentSpanId.
-                                    activity?.SetParentId(vote.traceparent);
-                                }
-                                catch (Exception ex)
-                                {
-                                     Log.Error(ex, "Failed to set parent trace ID from Redis payload: {Traceparent}", vote.traceparent);
-                                }
+                                activity?.SetParentId(vote.traceparent);
                             }
-                            // ---------------------------------------------------------
-                            
-                            // Log context - The TraceId here MUST now match the Python Trace ID.
-                            Log.ForContext("traceId", activity?.TraceId.ToString() ?? "null")
-                               .ForContext("spanId", activity?.SpanId.ToString() ?? "null")
-                               .Information(
-                                   "Processing vote for {VoteChoice} by {VoterId}",
-                                   vote.vote,
-                                   vote.voter_id
-                               );
+                            catch (Exception ex)
+                            {
+                                Log.Error(
+                                    ex,
+                                    "Failed to set parent trace ID from Redis payload: {Traceparent}",
+                                    vote.traceparent);
+                            }
+                        }
 
-                            if (!pgsql.State.Equals(System.Data.ConnectionState.Open))
-                            {
-                                Console.WriteLine("Reconnecting DB");
-                                pgsql = OpenDbConnection(
-                                    "Server=db;Username=postgres;Password=postgres;"
-                                );
-                            }
-                            else
-                            {
-                                UpdateVote(pgsql, vote.voter_id, vote.vote);
-                            }
+                        Log.ForContext("traceId", activity?.TraceId.ToString() ?? "null")
+                           .ForContext("spanId", activity?.SpanId.ToString() ?? "null")
+                           .Information(
+                               "Processing vote for {VoteChoice} by {VoterId}",
+                               vote.vote,
+                               vote.voter_id);
+
+                        if (!pgsql.State.Equals(System.Data.ConnectionState.Open))
+                        {
+                            Console.WriteLine("Reconnecting DB");
+                            pgsql = OpenDbConnection(
+                                "Server=db;Username=postgres;Password=postgres;");
+                        }
+                        else
+                        {
+                            UpdateVote(pgsql, vote.voter_id, vote.vote);
                         }
                     }
                     else
@@ -137,18 +139,17 @@ namespace Worker
             }
             catch (Exception ex)
             {
-                Console.Error.WriteLine(ex.ToString());
+                Console.Error.WriteLine(ex);
                 return 1;
             }
         }
 
         // -------------------------------------------------
-        // Helpers (Unchanged)
+        // Helpers
         // -------------------------------------------------
 
         private static NpgsqlConnection OpenDbConnection(string connectionString)
         {
-            // ... (unchanged) ...
             NpgsqlConnection connection;
 
             while (true)
@@ -159,7 +160,7 @@ namespace Worker
                     connection.Open();
                     break;
                 }
-                catch (Exception)
+                catch
                 {
                     Console.Error.WriteLine("Waiting for db");
                     Thread.Sleep(1000);
@@ -169,10 +170,11 @@ namespace Worker
             Console.Error.WriteLine("Connected to db");
 
             var command = connection.CreateCommand();
-            command.CommandText = @"CREATE TABLE IF NOT EXISTS votes (
-                                        id VARCHAR(255) NOT NULL UNIQUE,
-                                        vote VARCHAR(255) NOT NULL
-                                    )";
+            command.CommandText =
+                @"CREATE TABLE IF NOT EXISTS votes (
+                    id VARCHAR(255) NOT NULL UNIQUE,
+                    vote VARCHAR(255) NOT NULL
+                  )";
             command.ExecuteNonQuery();
 
             return connection;
@@ -180,7 +182,6 @@ namespace Worker
 
         private static ConnectionMultiplexer OpenRedisConnection(string hostname)
         {
-            // ... (unchanged) ...
             var ipAddress = GetIp(hostname);
             Console.WriteLine($"Found redis at {ipAddress}");
 
@@ -199,19 +200,18 @@ namespace Worker
             }
         }
 
-        private static string GetIp(string hostname)
-            => Dns.GetHostEntryAsync(hostname)
-                .Result
-                .AddressList
-                .First(a => a.AddressFamily == AddressFamily.InterNetwork)
-                .ToString();
+        private static string GetIp(string hostname) =>
+            Dns.GetHostEntryAsync(hostname)
+               .Result
+               .AddressList
+               .First(a => a.AddressFamily == AddressFamily.InterNetwork)
+               .ToString();
 
         private static void UpdateVote(
             NpgsqlConnection connection,
             string voterId,
             string vote)
         {
-            // ... (unchanged) ...
             var command = connection.CreateCommand();
 
             try
