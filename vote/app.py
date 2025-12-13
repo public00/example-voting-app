@@ -11,13 +11,12 @@ import time
 # --- Code-Level Resilience: Fail-Safe Import ---
 try:
     # Import all necessary tracing functions, including the new raw ID extractor
-    from tracing_setup import get_current_traceparent, start_trace_span, get_current_trace_id_raw
+    from tracing_setup import get_current_traceparent, start_trace_span
 except ImportError as e:
     # Define placeholder functions for graceful degradation
     print(f"FATAL: Tracing setup failed: {e}. Running without distributed tracing.")
     
     def get_current_traceparent(): return None
-    def get_current_trace_id_raw(): return None
     def start_trace_span(span_name, kind=None):
         class DummySpan:
             def __enter__(self): return None
@@ -25,6 +24,7 @@ except ImportError as e:
             def record_exception(self, e): pass
             def set_attribute(self, key, value): pass
         return DummySpan()
+# We don't need get_current_trace_id_raw() anymore, it was causing problems.
 # ----------------------------------------------------
 
 option_a = os.getenv('OPTION_A', "Cats")
@@ -64,7 +64,6 @@ def health():
 def cast_vote_api():
     voter_id = request.cookies.get('voter_id')
     if not voter_id:
-        # NOTE: Using a shorter voter_id generation as per original code context
         voter_id = hex(random.getrandbits(64))[2:-1] 
 
     with start_trace_span("vote-api-request") as span:
@@ -73,17 +72,24 @@ def cast_vote_api():
             vote = content['vote']
             
             # 1. Get the full W3C header for propagation via Redis
-            # This is now guaranteed to be a valid W3C header string (or a manually generated one).
+            # This is guaranteed to be a valid W3C header string.
             traceparent = get_current_traceparent()
             
-            # 2. Extract the raw Trace ID for local logging 
-            trace_id_for_log = get_current_trace_id_raw()
-            
+            # 2. Extract the raw Trace ID for local logging (FIXED LOGIC)
+            if traceparent:
+                try:
+                    # W3C format is: 00-TRACEID-SPANID-01. We want the second element.
+                    raw_trace_id_for_log = traceparent.split('-')[1]
+                except:
+                    raw_trace_id_for_log = "parsing_error"
+            else:
+                raw_trace_id_for_log = "null"
+
             app.logger.info('Vote received via API', extra={
                 'vote': vote, 
                 'voter_id': voter_id,
-                # Log the Trace ID derived from the guaranteed trace context.
-                'traceparent_generated': trace_id_for_log if trace_id_for_log else "null" 
+                # THIS LOGGED ID NOW MATCHES THE ONE SENT TO REDIS
+                'traceparent_generated': raw_trace_id_for_log
             })
 
             redis = get_redis()
@@ -92,7 +98,7 @@ def cast_vote_api():
             data = json.dumps({
                 'voter_id': voter_id, 
                 'vote': vote,
-                'traceparent': traceparent # <-- This is guaranteed NOT to be null now
+                'traceparent': traceparent 
             })
             redis.rpush('votes', data)
 
@@ -108,14 +114,13 @@ def cast_vote_api():
             return jsonify(success=False, error="Internal Server Error"), 500
 
 
-@app.route("/", methods=['GET']) # Removed 'POST' to force voting via /api/vote
+@app.route("/", methods=['GET'])
 def hello():
     """Renders the homepage."""
     voter_id = request.cookies.get('voter_id')
     if not voter_id:
         voter_id = hex(random.getrandbits(64))[2:-1]
 
-    # Manually start a trace span for the homepage request
     with start_trace_span("vote-homepage-request") as span:
         
         resp = make_response(render_template(
@@ -123,7 +128,7 @@ def hello():
             option_a=option_a,
             option_b=option_b,
             hostname=hostname,
-            vote=None, # No vote processed on GET
+            vote=None,
         ))
         resp.set_cookie('voter_id', voter_id)
         return resp

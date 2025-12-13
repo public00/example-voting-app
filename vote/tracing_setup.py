@@ -5,7 +5,6 @@
 #  - tracer = get_tracer(__name__)
 #  - start_trace_span(name)
 #  - get_current_traceparent() (Full W3C header for Redis)
-#  - get_current_trace_id_raw() (Raw ID for logging)
 # ---------------------------------------------------
 
 from opentelemetry import trace
@@ -77,22 +76,8 @@ def get_current_traceparent():
 
 # ---------------------------------------
 # 4. Extract RAW Trace ID for Log Correlation
+#    FUNCTION REMOVED: Logic moved to app.py for guaranteed integrity.
 # ---------------------------------------
-def get_current_trace_id_raw():
-    """
-    Extracts the raw 32-character Trace ID from the current W3C context 
-    for Dynatrace log correlation.
-    """
-    # Call get_current_traceparent() which is now guaranteed to return a valid W3C header
-    w3c_traceparent = get_current_traceparent() 
-    
-    if w3c_traceparent:
-        try:
-            # W3C format is: 00-TRACEID-SPANID-01
-            raw_trace_id = w3c_traceparent.split('-')[1]
-            return raw_trace_id
-        except IndexError:
-            trace_logger.error(f"Failed to parse Trace ID from W3C string: {w3c_traceparent}")
-            return None
-    
-    return None # Should not be reached but remains as a safe final fallback
+# def get_current_trace_id_raw():
+#     ...
+#     return None
