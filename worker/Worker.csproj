@@ -6,30 +6,26 @@
     </PropertyGroup>
 
     <ItemGroup>
-        <!-- Serilog -->
         <PackageReference Include="Serilog" Version="3.1.1" />
         <PackageReference Include="Serilog.Sinks.Console" Version="5.0.1" />
+        
+        <PackageReference Include="Serilog.Sinks.OpenTelemetry" Version="2.3.0" /> 
+        
+        <PackageReference Include="StackExchange.Redis" Version="2.7.4" />
 
-        <!-- Redis -->
-        <PackageReference Include="StackExchange.Redis" Version="2.2.4" />
+        <PackageReference Include="Npgsql" Version="8.0.2" />
 
-        <!-- PostgreSQL -->
-        <PackageReference Include="Npgsql" Version="4.1.9" />
+        <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
 
-        <!-- JSON -->
-        <PackageReference Include="Newtonsoft.Json" Version="13.0.1" />
+        <PackageReference Include="OpenTelemetry" Version="1.7.0" />
+        <PackageReference Include="OpenTelemetry.Extensions.Hosting" Version="1.7.0" />
+        <PackageReference Include="OpenTelemetry.Exporter.OpenTelemetryProtocol" Version="1.7.0" />
 
-        <!-- ⭐ OpenTelemetry Core (ADDED as requested) -->
-        <PackageReference Include="OpenTelemetry" Version="1.6.0" />
-
-        <!-- OpenTelemetry hosting + OTLP exporter -->
-        <PackageReference Include="OpenTelemetry.Extensions.Hosting" Version="1.6.0" />
-        <PackageReference Include="OpenTelemetry.Exporter.OpenTelemetryProtocol" Version="1.6.0" />
-
-        <!-- Optional Instrumentation -->
-        <PackageReference Include="OpenTelemetry.Instrumentation.StackExchangeRedis" Version="1.0.0-beta.4" />
-        <PackageReference Include="OpenTelemetry.Instrumentation.Process" Version="0.5.0-beta.3" />
-        <PackageReference Include="OpenTelemetry.Instrumentation.Runtime" Version="1.0.0-beta.4" />
+        <PackageReference Include="OpenTelemetry.Instrumentation.StackExchangeRedis" Version="1.0.0-rc9" />
+        <PackageReference Include="OpenTelemetry.Instrumentation.Process" Version="1.7.0" />
+        <PackageReference Include="OpenTelemetry.Instrumentation.Runtime" Version="1.7.0" />
+        
+        <PackageReference Include="Microsoft.Extensions.Hosting" Version="7.0.0" /> 
     </ItemGroup>
 
 </Project>

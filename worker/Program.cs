@@ -6,7 +6,7 @@ using System.Net;
 using System.Net.Sockets;
 using System.Threading;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Hosting; // Required for Host.CreateDefaultBuilder
 using Newtonsoft.Json;
 using Npgsql;
 using Serilog;
@@ -15,6 +15,8 @@ using StackExchange.Redis;
 using OpenTelemetry;
 using OpenTelemetry.Trace;
 using OpenTelemetry.Resources;
+using OpenTelemetry.Context.Propagation; // Required for TraceContextPropagator
+using OpenTelemetry.Instrumentation.StackExchangeRedis; // Required for Redis instrumentation
 
 namespace Worker
 {
@@ -22,6 +24,38 @@ namespace Worker
     {
         public static int Main(string[] args)
         {
+            // ---- Host + DI + OpenTelemetry Setup ----
+            // We use the Host builder pattern to correctly initialize OpenTelemetry 
+            // and make the Tracer available via Dependency Injection.
+            using var host = Host.CreateDefaultBuilder(args)
+                .ConfigureServices(services =>
+                {
+                    services.AddOpenTelemetry()
+                        .WithTracing(builder => builder
+                            // Add a source name, used when retrieving the tracer
+                            .AddSource("Worker")
+                            // Automatically trace StackExchange.Redis operations
+                            .AddRedisInstrumentation() 
+                            .SetResourceBuilder(
+                                ResourceBuilder.CreateDefault()
+                                    .AddService("Worker")
+                            )
+                            // NOTE: OTLP Exporter is redundant if using Dynatrace OneAgent, 
+                            // but included here for a complete, exportable OTEL configuration.
+                            .AddOtlpExporter(opt =>
+                            {
+                                // Placeholder endpoint and headers for demonstration
+                                opt.Endpoint = new Uri("https://<your-env>.live.dynatrace.com/api/v2/otlp");
+                                opt.Headers = "Authorization=Api-Token <token>";
+                            })
+                        );
+                })
+                .Build();
+                
+            // Retrieve the tracer after the host is built
+            var tracer = host.Services.GetRequiredService<TracerProvider>().GetTracer("Worker");
+
+
             // ---- Serilog setup ----
             Log.Logger = new LoggerConfiguration()
                 .WriteTo.Console(new JsonFormatter())
@@ -29,29 +63,6 @@ namespace Worker
 
             try
             {
-                // ---- Host + DI + OpenTelemetry ----
-                using var host = Host.CreateDefaultBuilder(args)
-                    .ConfigureServices(services =>
-                    {
-                        services.AddOpenTelemetry()
-                            .WithTracing(builder => builder
-                                .AddSource("Worker")
-                                .SetResourceBuilder(
-                                    ResourceBuilder.CreateDefault()
-                                        .AddService("Worker")
-                                )
-                                .AddOtlpExporter(opt =>
-                                {
-                                    opt.Endpoint = new Uri("https://<your-env>.live.dynatrace.com/api/v2/otlp");
-                                    opt.Headers = "Authorization=Api-Token <token>";
-                                })
-                            );
-                    })
-                    .Build();
-
-                var tracerProvider = host.Services.GetRequiredService<TracerProvider>();
-                var tracer = tracerProvider.GetTracer("Worker");
-
                 // ---- Worker infrastructure ----
                 var pgsql = OpenDbConnection("Server=db;Username=postgres;Password=postgres;");
                 var redisConn = OpenRedisConnection("redis");
@@ -60,6 +71,7 @@ namespace Worker
                 var keepAliveCommand = pgsql.CreateCommand();
                 keepAliveCommand.CommandText = "SELECT 1";
 
+                // Add 'traceparent' to the definition
                 var definition = new { vote = "", voter_id = "", traceparent = "" };
 
                 // ---- Main worker loop ----
@@ -79,25 +91,38 @@ namespace Worker
                     {
                         var vote = JsonConvert.DeserializeAnonymousType(json, definition);
 
-                        // ---- Extract parent trace context ----
+                        // ---- Extract parent trace context using W3C standard ----
                         ActivityContext parentContext = default;
                         bool hasParent = false;
 
                         if (!string.IsNullOrEmpty(vote.traceparent))
                         {
-                            parentContext = ActivityContext.Parse(vote.traceparent, null);
-                            hasParent = true;
+                            // 1. Use the standard OTEL W3C TraceContextPropagator to extract the parent context
+                            var propagator = new TraceContextPropagator();
+                            
+                            // The Python app put the full W3C string in the 'traceparent' field, 
+                            // so we provide a delegate that returns the value for the 'traceparent' key.
+                            var context = propagator.Extract(default, vote.traceparent, 
+                                (carrier, key) => key == "traceparent" ? new[] { carrier } : Enumerable.Empty<string>());
+                            
+                            if (context.ActivityContext.HasValue)
+                            {
+                                parentContext = context.ActivityContext.Value;
+                                hasParent = true;
+                            }
                         }
 
                         // ---- Create Worker Activity with correct parent ----
-                        using (var activity = hasParent
-                            ? tracer.StartActivity(
-                                "Worker.ProcessVote",
-                                ActivityKind.Consumer,
-                                parentContext)
-                            : tracer.StartActivity("Worker.ProcessVote", ActivityKind.Consumer))
+                        
+                        // Use the tracer to start a new Activity (Span)
+                        using (var activity = tracer.StartActivity(
+                            "Worker.ProcessVote",
+                            ActivityKind.Consumer,
+                            hasParent ? parentContext : default))
                         {
                             // Add logging fields
+                            // The Dynatrace OneAgent automatically reports the Span/Trace ID, 
+                            // but we log it here for robust correlation with Serilog.
                             Log.ForContext("traceId", activity?.TraceId.ToString())
                                .ForContext("spanId", activity?.SpanId.ToString())
                                .Information("Processing vote for {VoteChoice} by {VoterId}",
@@ -113,6 +138,9 @@ namespace Worker
                             {
                                 UpdateVote(pgsql, vote.voter_id, vote.vote);
                             }
+                            
+                            // Stop the activity when done processing this specific vote
+                            activity.Stop();
                         }
                     }
                     else
