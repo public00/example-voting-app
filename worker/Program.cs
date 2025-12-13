@@ -16,54 +16,42 @@ using OpenTelemetry;
 using OpenTelemetry.Trace;
 using OpenTelemetry.Resources;
 using OpenTelemetry.Exporter;
-using OpenTelemetry.Instrumentation.SqlClient;
-
+using OpenTelemetry.Instrumentation.Http;
 
 namespace Worker
 {
     public class Program
     {
-        private static readonly ActivitySource ActivitySource =
-            new ActivitySource("Worker.ProcessVote");
+        // Global ActivitySource for manual spans
+        private static readonly ActivitySource ActivitySource = new ActivitySource("Worker.ProcessVote");
 
         public static int Main(string[] args)
         {
+            // --- Dynatrace OTLP settings ---
             var endpointUrl = Environment.GetEnvironmentVariable("DT_ENDPOINT_URL");
-            var apiToken = Environment.GetEnvironmentVariable("DT_API_TOKEN");
+            var apiToken = Environment.GetEnvironmentVariable("DT_AUTH_TOKEN");
 
-            using var tracerProvider =
-                Sdk.CreateTracerProviderBuilder()
-                   .AddSource("Worker.ProcessVote")
-                   .SetResourceBuilder(
-                        ResourceBuilder.CreateDefault()
-                            .AddService(serviceName: "Worker-Service"))
-                   .AddHttpClientInstrumentation()
-                   .AddSqlClientInstrumentation(options =>
-                   {
-                       options.SetDbStatementForText = true;
-                       options.RecordException = true;
-                   })
-                   .AddRedisInstrumentation()
-                   .AddOtlpExporter(opt =>
-                   {
-                       opt.Endpoint = new Uri(endpointUrl);
-                       opt.Protocol = OtlpExportProtocol.HttpProtobuf;
-                       opt.Headers = $"Authorization=Api-Token {apiToken}";
-                   })
-                   .Build();
+            // --- OpenTelemetry Tracer ---
+            using var tracerProvider = Sdk.CreateTracerProviderBuilder()
+                .AddSource("Worker.ProcessVote")
+                .SetResourceBuilder(ResourceBuilder.CreateDefault()
+                    .AddService("Worker-Service"))
+                .AddHttpClientInstrumentation()
+                .AddOtlpExporter(opt =>
+                {
+                    opt.Endpoint = new Uri(endpointUrl);
+                    opt.Protocol = OtlpExportProtocol.HttpProtobuf;
+                    opt.Headers = $"Api-Token={apiToken}";
+                })
+                .Build();
 
-            // -------------------------------
-            // Serilog setup
-            // -------------------------------
+            // --- Serilog setup ---
             Log.Logger = new LoggerConfiguration()
                 .WriteTo.Console(new JsonFormatter())
                 .CreateLogger();
 
             try
             {
-                // -------------------------------
-                // Worker infrastructure
-                // -------------------------------
                 var pgsql = OpenDbConnection("Server=db;Username=postgres;Password=postgres;");
                 var redisConn = OpenRedisConnection("redis");
                 var redis = redisConn.GetDatabase();
@@ -73,9 +61,6 @@ namespace Worker
 
                 var definition = new { vote = "", voter_id = "", traceparent = "" };
 
-                // -------------------------------
-                // Main worker loop
-                // -------------------------------
                 while (true)
                 {
                     Thread.Sleep(100);
@@ -87,16 +72,18 @@ namespace Worker
                         redis = redisConn.GetDatabase();
                     }
 
+                    // Pop from Redis
                     string json = redis.ListLeftPopAsync("votes").Result;
 
                     if (json != null)
                     {
                         var vote = JsonConvert.DeserializeAnonymousType(json, definition);
 
-                        using var activity =
-                            ActivitySource.StartActivity(
-                                "ProcessVoteFromQueue",
-                                ActivityKind.Consumer);
+                        // Manual span for processing a vote
+                        using var activity = ActivitySource.StartActivity("ProcessVoteFromQueue", ActivityKind.Consumer);
+
+                        // Manually trace Redis operation
+                        using var redisActivity = ActivitySource.StartActivity("Redis.ListLeftPop");
 
                         if (!string.IsNullOrEmpty(vote.traceparent))
                         {
@@ -106,28 +93,23 @@ namespace Worker
                             }
                             catch (Exception ex)
                             {
-                                Log.Error(
-                                    ex,
-                                    "Failed to set parent trace ID from Redis payload: {Traceparent}",
-                                    vote.traceparent);
+                                Log.Error(ex, "Failed to set parent trace ID from Redis payload: {Traceparent}", vote.traceparent);
                             }
                         }
 
                         Log.ForContext("traceId", activity?.TraceId.ToString() ?? "null")
                            .ForContext("spanId", activity?.SpanId.ToString() ?? "null")
-                           .Information(
-                               "Processing vote for {VoteChoice} by {VoterId}",
-                               vote.vote,
-                               vote.voter_id);
+                           .Information("Processing vote for {VoteChoice} by {VoterId}", vote.vote, vote.voter_id);
 
                         if (!pgsql.State.Equals(System.Data.ConnectionState.Open))
                         {
                             Console.WriteLine("Reconnecting DB");
-                            pgsql = OpenDbConnection(
-                                "Server=db;Username=postgres;Password=postgres;");
+                            pgsql = OpenDbConnection("Server=db;Username=postgres;Password=postgres;");
                         }
                         else
                         {
+                            // Manual span for PostgreSQL update
+                            using var sqlActivity = ActivitySource.StartActivity("PostgreSQL.UpdateVote");
                             UpdateVote(pgsql, vote.voter_id, vote.vote);
                         }
                     }
@@ -143,10 +125,6 @@ namespace Worker
                 return 1;
             }
         }
-
-        // -------------------------------------------------
-        // Helpers
-        // -------------------------------------------------
 
         private static NpgsqlConnection OpenDbConnection(string connectionString)
         {
@@ -207,25 +185,20 @@ namespace Worker
                .First(a => a.AddressFamily == AddressFamily.InterNetwork)
                .ToString();
 
-        private static void UpdateVote(
-            NpgsqlConnection connection,
-            string voterId,
-            string vote)
+        private static void UpdateVote(NpgsqlConnection connection, string voterId, string vote)
         {
             var command = connection.CreateCommand();
 
             try
             {
-                command.CommandText =
-                    "INSERT INTO votes (id, vote) VALUES (@id, @vote)";
+                command.CommandText = "INSERT INTO votes (id, vote) VALUES (@id, @vote)";
                 command.Parameters.AddWithValue("@id", voterId);
                 command.Parameters.AddWithValue("@vote", vote);
                 command.ExecuteNonQuery();
             }
             catch (DbException)
             {
-                command.CommandText =
-                    "UPDATE votes SET vote = @vote WHERE id = @id";
+                command.CommandText = "UPDATE votes SET vote = @vote WHERE id = @id";
                 command.ExecuteNonQuery();
             }
             finally
