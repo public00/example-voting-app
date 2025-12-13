@@ -14,7 +14,7 @@ spec:
       labels:
         app: worker
     spec:
-      # --- KEEP: Defines the volume source for the CSI driver ---
+      # --- RESTORED: CSI Volume for OneAgent Injection ---
       volumes:
       - name: dynatrace-oneagent
         csi:
@@ -22,13 +22,15 @@ spec:
           readOnly: true
           volumeAttributes:
             tenant: "dynatrace" 
-      # --------------------------------------------------------
 
       containers:
       - image: vedranregistry99.azurecr.io/worker
         name: worker
         
-        # --- REMOVED: The manual volumeMounts section to avoid duplication error ---
+        volumeMounts:
+        - name: dynatrace-oneagent
+          mountPath: /opt/dynatrace/oneagent
+        
         
         resources:
           requests:

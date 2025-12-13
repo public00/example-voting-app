@@ -10,10 +10,9 @@ import time
 
 # --- Code-Level Resilience: Fail-Safe Import ---
 try:
-    # Import all necessary tracing functions, including the new raw ID extractor
-    from tracing_setup import get_current_traceparent, start_trace_span
+    # Import instrument_flask (NEW)
+    from tracing_setup import get_current_traceparent, start_trace_span, instrument_flask 
 except ImportError as e:
-    # Define placeholder functions for graceful degradation
     print(f"FATAL: Tracing setup failed: {e}. Running without distributed tracing.")
     
     def get_current_traceparent(): return None
@@ -24,7 +23,6 @@ except ImportError as e:
             def record_exception(self, e): pass
             def set_attribute(self, key, value): pass
         return DummySpan()
-# We don't need get_current_trace_id_raw() anymore, it was causing problems.
 # ----------------------------------------------------
 
 option_a = os.getenv('OPTION_A', "Cats")
@@ -33,9 +31,12 @@ hostname = socket.gethostname()
 
 app = Flask(__name__)
 
+# --- NEW: Call the Instrumentation Hook ---
+instrument_flask(app)
+# ----------------------------------------
+
 # --- JSON Logger Setup ---
 logHandler = logging.StreamHandler()
-# Ensure the formatter handles the JSON structure correctly
 formatter = jsonlogger.JsonFormatter('%(asctime)s %(levelname)s %(message)s') 
 logHandler.setFormatter(formatter)
 app.logger.addHandler(logHandler)
@@ -66,19 +67,18 @@ def cast_vote_api():
     if not voter_id:
         voter_id = hex(random.getrandbits(64))[2:-1] 
 
+    # Note: Flask instrumentation should automatically start a span here, but we keep the wrapper 
+    # for explicit logic control and span customization.
     with start_trace_span("vote-api-request") as span:
         try:
             content = request.json
             vote = content['vote']
             
-            # 1. Get the full W3C header for propagation via Redis
-            # This is guaranteed to be a valid W3C header string.
             traceparent = get_current_traceparent()
             
-            # 2. Extract the raw Trace ID for local logging (FIXED LOGIC)
+            # Extract the raw Trace ID for local logging (for log correlation)
             if traceparent:
                 try:
-                    # W3C format is: 00-TRACEID-SPANID-01. We want the second element.
                     raw_trace_id_for_log = traceparent.split('-')[1]
                 except:
                     raw_trace_id_for_log = "parsing_error"
@@ -88,7 +88,6 @@ def cast_vote_api():
             app.logger.info('Vote received via API', extra={
                 'vote': vote, 
                 'voter_id': voter_id,
-                # THIS LOGGED ID NOW MATCHES THE ONE SENT TO REDIS
                 'traceparent_generated': raw_trace_id_for_log
             })
 
@@ -116,7 +115,6 @@ def cast_vote_api():
 
 @app.route("/", methods=['GET'])
 def hello():
-    """Renders the homepage."""
     voter_id = request.cookies.get('voter_id')
     if not voter_id:
         voter_id = hex(random.getrandbits(64))[2:-1]

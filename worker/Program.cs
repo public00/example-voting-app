@@ -1,6 +1,6 @@
 using System;
 using System.Data.Common;
-using System.Diagnostics; // Required for Activity and ActivityContext
+using System.Diagnostics; 
 using System.Linq;
 using System.Net;
 using System.Net.Sockets;
@@ -11,12 +11,39 @@ using Serilog;
 using Serilog.Formatting.Json;
 using StackExchange.Redis;
 
+// NEW OpenTelemetry Usings
+using OpenTelemetry.Trace;
+using OpenTelemetry.Exporter;
+using OpenTelemetry.Resources;
+
+
 namespace Worker
 {
     public class Program
     {
         public static int Main(string[] args)
         {
+           
+           var endpointUrl = Environment.GetEnvironmentVariable("DT_ENDPOINT_URL");
+            var apiToken = Environment.GetEnvironmentVariable("DT_API_TOKEN");
+            using var tracerProvider = Sdk.CreateTracerProviderBuilder()
+                .AddSource("Worker.ProcessVote") 
+                .SetResourceBuilder(ResourceBuilder.CreateDefault()
+                    .AddService("Worker-Service") 
+                )
+                // Add instrumentation for standard libraries
+                .AddHttpClientInstrumentation() 
+                
+                // Add the OTLP Exporter
+                .AddOtlpExporter(opt =>
+                {
+                    opt.Endpoint = endpoint; 
+                    opt.Protocol = OtlpExportProtocol.HttpProtobuf;
+                    opt.Headers = token;
+                })
+                .Build();
+            // ----------------------------------------
+            
             // -------------------------------
             // Serilog setup
             // -------------------------------
@@ -59,35 +86,30 @@ namespace Worker
                     {
                         var vote = JsonConvert.DeserializeAnonymousType(json, definition);
 
-                        // -------------------------------
-                        // Start worker Activity (Span)
-                        // -------------------------------
-                        using (var activity = new Activity("Worker.ProcessVote"))
+                        // Use the ActivitySource defined above ("Worker.ProcessVote") to create the Activity
+                        var activitySource = new ActivitySource("Worker.ProcessVote");
+
+                        using (var activity = activitySource.StartActivity("ProcessVoteFromQueue", ActivityKind.Consumer))
                         {
-                            // --- FINAL CRITICAL FIX: Direct W3C Header Injection ---
+                            // --- CRITICAL FIX: Direct W3C Header Injection ---
                             if (!string.IsNullOrEmpty(vote.traceparent))
                             {
                                 try 
                                 {
                                     // SetParentId(string) attempts to parse the W3C traceparent header 
                                     // and set the current Activity's TraceId and ParentSpanId.
-                                    activity.SetParentId(vote.traceparent);
+                                    activity?.SetParentId(vote.traceparent);
                                 }
                                 catch (Exception ex)
                                 {
-                                     // If linking fails (e.g., malformed header), log the failure.
-                                     // The activity will proceed and start a new root trace, 
-                                     // which is better than crashing.
                                      Log.Error(ex, "Failed to set parent trace ID from Redis payload: {Traceparent}", vote.traceparent);
                                 }
                             }
                             // ---------------------------------------------------------
                             
-                            activity.Start(); // Start the span.
-
                             // Log context - The TraceId here MUST now match the Python Trace ID.
-                            Log.ForContext("traceId", activity.TraceId.ToString())
-                               .ForContext("spanId", activity.SpanId.ToString())
+                            Log.ForContext("traceId", activity?.TraceId.ToString() ?? "null")
+                               .ForContext("spanId", activity?.SpanId.ToString() ?? "null")
                                .Information(
                                    "Processing vote for {VoteChoice} by {VoterId}",
                                    vote.vote,
@@ -105,8 +127,6 @@ namespace Worker
                             {
                                 UpdateVote(pgsql, vote.voter_id, vote.vote);
                             }
-                            
-                            activity.Stop(); // Stop the span.
                         }
                     }
                     else
@@ -128,6 +148,7 @@ namespace Worker
 
         private static NpgsqlConnection OpenDbConnection(string connectionString)
         {
+            // ... (unchanged) ...
             NpgsqlConnection connection;
 
             while (true)
@@ -159,6 +180,7 @@ namespace Worker
 
         private static ConnectionMultiplexer OpenRedisConnection(string hostname)
         {
+            // ... (unchanged) ...
             var ipAddress = GetIp(hostname);
             Console.WriteLine($"Found redis at {ipAddress}");
 
@@ -189,6 +211,7 @@ namespace Worker
             string voterId,
             string vote)
         {
+            // ... (unchanged) ...
             var command = connection.CreateCommand();
 
             try
