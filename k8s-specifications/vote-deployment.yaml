@@ -1,9 +1,9 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
+  name: vote
   labels:
     app: vote
-  name: vote
 spec:
   replicas: 2
   selector:
@@ -16,36 +16,30 @@ spec:
       annotations:
         oneagent.dynatrace.com/inject: "false"
     spec:
-      
       containers:
-      - image: vedranregistry99.azurecr.io/vote
-        name: vote
-        ports:
-        - containerPort: 80
-          name: vote
-        
-        env:
-        # 1. OTLP Trace Endpoint (Manual Value)
-        - name: DT_TRACE_ENDPOINT_URL
-          value: "https://dtu72444.apps.dynatrace.com/api/v2/otlp/v1/traces"
-          
-        # 2. OTLP Log Endpoint (Manual Value)
-        - name: DT_LOGS_ENDPOINT_URL
-          value: "https://dtu72444.apps.dynatrace.com/api/v2/otlp/v1/logs"
-          
-        # 3. Dynatrace Auth Token
-        - name: DT_AUTH_TOKEN
-          valueFrom:
-            secretKeyRef:
-              name: dynatrace-otlp-secret
-              key: api_token # <-- 🎉 CORRECTED KEY NAME!
-        
-        resources:
-          requests:
-            cpu: "100m"
-            memory: "256Mi"
-          limits:
-            cpu: "200m"
-            memory: "256Mi"
+        - name: vote
+          image: vedranregistry99.azurecr.io/vote
+          ports:
+            - name: vote
+              containerPort: 80
+
+          env:
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: "http://dynatrace-otel-collector:4318"
+
+            - name: DT_API_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: dynatrace-token
+                  key: api-token
+
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "256Mi"
+            limits:
+              cpu: "200m"
+              memory: "256Mi"
+
       imagePullSecrets:
-      - name: acr-secret
+        - name: acr-secret

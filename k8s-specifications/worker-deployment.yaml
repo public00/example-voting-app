@@ -1,9 +1,9 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
+  name: worker
   labels:
     app: worker
-  name: worker
 spec:
   replicas: 1
   selector:
@@ -14,31 +14,21 @@ spec:
       labels:
         app: worker
       annotations:
-        # Correctly disabling Dynatrace CSI/webhook injection for Agentless OTLP
         oneagent.dynatrace.com/inject: "false"
     spec:
       containers:
-      - image: vedranregistry99.azurecr.io/worker
-        name: worker
-        
-        env:
-        - name: DT_ENDPOINT_URL
-          valueFrom:
-            secretKeyRef:
-              name: dynatrace-otlp-secret 
-              key: endpoint_url          
-        - name: DT_AUTH_TOKEN
-          valueFrom:
-            secretKeyRef:
-              name: dynatrace-otlp-secret
-              key: api_token
-        
-        resources:
-          requests:
-            cpu: "100m"
-            memory: "128Mi"
-          limits:
-            cpu: "200m"
-            memory: "256Mi"
+        - name: worker
+          image: vedranregistry99.azurecr.io/worker
+          ports: []
+          env:
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: "http://dynatrace-otel-collector:4318"
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
+            limits:
+              cpu: "200m"
+              memory: "256Mi"
       imagePullSecrets:
-      - name: acr-secret
+        - name: acr-secret
