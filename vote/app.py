@@ -1,6 +1,8 @@
+# app.py (REWRITTEN FOR OTel LOGS)
+
 from flask import Flask, jsonify, request, render_template, make_response, g
 from redis import Redis
-from pythonjsonlogger import jsonlogger
+# REMOVED: from pythonjsonlogger import jsonlogger
 import json
 import random
 import socket
@@ -11,10 +13,11 @@ import time
 # --- Code-Level Resilience: Fail-Safe Import ---
 try:
     # Import instrument_flask (NEW)
-    from tracing_setup import get_current_traceparent, start_trace_span, instrument_flask 
+    from tracing_setup import get_current_traceparent, start_trace_span, instrument_flask
 except ImportError as e:
-    print(f"FATAL: Tracing setup failed: {e}. Running without distributed tracing.")
+    print(f"FATAL: Tracing setup failed: {e}. Running without distributed tracing/logging.")
     
+    # (Dummy functions remain for resilience)
     def get_current_traceparent(): return None
     def start_trace_span(span_name, kind=None):
         class DummySpan:
@@ -31,20 +34,17 @@ hostname = socket.gethostname()
 
 app = Flask(__name__)
 
-# --- NEW: Call the Instrumentation Hook ---
+# --- NEW: Call the Instrumentation Hook (Handles all OTel setup now) ---
 instrument_flask(app)
 # ----------------------------------------
 
-# --- JSON Logger Setup ---
-logHandler = logging.StreamHandler()
-formatter = jsonlogger.JsonFormatter('%(asctime)s %(levelname)s %(message)s') 
-logHandler.setFormatter(formatter)
-app.logger.addHandler(logHandler)
+# --- LOGGING SETUP (SIMPLIFIED) ---
+# We no longer need the jsonlogger. The OTel LoggingHandler in tracing_setup
+# takes over. We just need to get the app logger instance.
 
-gunicorn_error_logger = logging.getLogger('gunicorn.error')
-app.logger.handlers.extend(gunicorn_error_logger.handlers)
+# NOTE: The OTel handler is configured in instrument_flask(app)
 app.logger.setLevel(logging.INFO)
-# -------------------------
+# ---------------------------------
 
 def get_redis():
     if not hasattr(g, 'redis'):
@@ -56,46 +56,39 @@ def health():
     try:
         redis = get_redis()
         redis.ping()
+        app.logger.info("Health check successful") # OTel will capture this log
         return "OK", 200
     except Exception as e:
-        app.logger.error("Health check failed", extra={'error': str(e)})
+        # Note: OTel will correlate this error log to the trace automatically
+        app.logger.error("Health check failed", extra={'error': str(e)}) 
         return "Unhealthy", 500
 
 @app.route("/api/vote", methods=['POST'])
 def cast_vote_api():
     voter_id = request.cookies.get('voter_id')
     if not voter_id:
-        voter_id = hex(random.getrandbits(64))[2:-1] 
+        voter_id = hex(random.getrandbits(64))[2:-1]
 
-    # Note: Flask instrumentation should automatically start a span here, but we keep the wrapper 
-    # for explicit logic control and span customization.
+    # Trace is automatically started by FlaskInstrumentor, and the span is retrieved implicitly for logging correlation.
     with start_trace_span("vote-api-request") as span:
         try:
             content = request.json
             vote = content['vote']
             
-            traceparent = get_current_traceparent()
-            
-            # Extract the raw Trace ID for local logging (for log correlation)
-            if traceparent:
-                try:
-                    raw_trace_id_for_log = traceparent.split('-')[1]
-                except:
-                    raw_trace_id_for_log = "parsing_error"
-            else:
-                raw_trace_id_for_log = "null"
-
+            # Since OTel logs automatically inject trace/span IDs, we only need to log relevant business data.
+            # The manual traceparent extraction is no longer strictly necessary for log correlation.
             app.logger.info('Vote received via API', extra={
-                'vote': vote, 
+                'vote': vote,
                 'voter_id': voter_id,
-                'traceparent_generated': raw_trace_id_for_log
+                # OTel automatically adds: 'otel.trace_id', 'otel.span_id'
             })
 
             redis = get_redis()
             
-            # Inject the final, guaranteed Trace Context into Redis Payload
+            # We still explicitly inject traceparent into the Redis payload for distributed tracing to a worker process.
+            traceparent = get_current_traceparent()
             data = json.dumps({
-                'voter_id': voter_id, 
+                'voter_id': voter_id,
                 'vote': vote,
                 'traceparent': traceparent 
             })
@@ -106,7 +99,8 @@ def cast_vote_api():
             return resp, 200
 
         except Exception as e:
-            app.logger.error("API Error", extra={'error': str(e)})
+            # This error log will be automatically correlated with the current trace/span
+            app.logger.error("API Error", extra={'error': str(e)}) 
             if span:
                 span.record_exception(e)
                 span.set_attribute("error", True)
@@ -120,6 +114,9 @@ def hello():
         voter_id = hex(random.getrandbits(64))[2:-1]
 
     with start_trace_span("vote-homepage-request") as span:
+        
+        # OTel captures the implicit log from the / route
+        app.logger.info("Rendering homepage")
         
         resp = make_response(render_template(
             'index.html',
