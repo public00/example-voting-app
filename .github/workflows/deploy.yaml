@@ -157,6 +157,9 @@ jobs:
             k8s-specifications/policy-allow-vote-redis.yaml
             k8s-specifications/policy-allow-worker.yaml
             k8s-specifications/policy-allow-result-db.yaml
+            k8s-specifications/otel-collector-config.yaml
+            k8s-specifications/otel-collector-deployment.yaml
+            k8s-specifications/otel-collector-service.yaml
           images: |
             ${{ env.ACR_NAME }}.azurecr.io/vote:${{ github.sha }}
             ${{ env.ACR_NAME }}.azurecr.io/result:${{ github.sha }}
