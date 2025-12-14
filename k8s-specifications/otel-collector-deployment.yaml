@@ -49,4 +49,4 @@ spec:
       volumes:
         - name: config
           configMap:
-            name: otel-collector-config
+            name: otel-collector-config 
