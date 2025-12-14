@@ -1,4 +1,3 @@
-# Fix 1: Change namespace to default
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -16,14 +15,14 @@ data:
       memory_limiter:
         limit_mib: 400
         spike_limit_mib: 100
+        # CRITICAL FIX: Add the required check_interval parameter
+        check_interval: 1s 
       batch: {}
 
     exporters:
       otlphttp/dynatrace:
-        # Fix 2: Use an environment variable for the endpoint, defined in the Deployment
         endpoint: "${env:DT_ENDPOINT_URL}" 
         headers:
-          # Fix 3: Use an environment variable for the token, defined in the Deployment
           Authorization: "Api-Token ${env:DT_API_TOKEN}" 
 
     service:
