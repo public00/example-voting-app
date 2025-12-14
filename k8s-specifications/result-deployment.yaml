@@ -14,7 +14,7 @@ spec:
   selector:
     matchLabels:
       app: result
-  template:
+  template: 
     metadata:
       labels:
         app: result
