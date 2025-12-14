@@ -24,6 +24,22 @@ spec:
         - containerPort: 80
           name: vote
         
+        env:
+        # 1. OTLP Trace Endpoint (Manual Value)
+        - name: DT_TRACE_ENDPOINT_URL
+          value: "https://dtu72444.apps.dynatrace.com/api/v2/otlp/v1/traces"
+          
+        # 2. OTLP Log Endpoint (Manual Value)
+        - name: DT_LOGS_ENDPOINT_URL
+          value: "https://dtu72444.apps.dynatrace.com/api/v2/otlp/v1/logs"
+          
+        # 3. Dynatrace Auth Token
+        - name: DT_AUTH_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: dynatrace-otlp-secret
+              key: api_token # <-- 🎉 CORRECTED KEY NAME!
+        
         resources:
           requests:
             cpu: "100m"
