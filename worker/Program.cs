@@ -70,8 +70,8 @@ namespace Worker
                 var redisConn = OpenRedisConnection("redis");
                 var redis = redisConn.GetDatabase();
 
-                var keepAliveCommand = pgsql.CreateCommand();
-                keepAliveCommand.CommandText = "SELECT 1";
+                var keepAlive = pgsql.CreateCommand();
+                keepAlive.CommandText = "SELECT 1";
 
                 while (true)
                 {
@@ -80,39 +80,58 @@ namespace Worker
                     string json = redis.ListLeftPop("votes");
                     if (json == null)
                     {
-                        keepAliveCommand.ExecuteNonQuery();
+                        keepAlive.ExecuteNonQuery();
                         continue;
                     }
 
                     var payload =
                         JsonConvert.DeserializeObject<VotePayload>(json);
 
+                    // ----------------------------
+                    // TRACE CONTEXT CONTINUATION
+                    // ----------------------------
                     ActivityContext parentContext = default;
 
                     if (!string.IsNullOrEmpty(payload.traceparent)
                         && ActivityContext.TryParse(
                             payload.traceparent,
                             null,
-                            out var parsedContext))
+                            out var parsed))
                     {
-                        parentContext = parsedContext;
+                        parentContext = parsed;
                     }
 
-                    using var activity =
+                    using var workerSpan =
                         ActivitySource.StartActivity(
                             "ProcessVoteFromQueue",
                             ActivityKind.Consumer,
                             parentContext);
 
-                    Log.ForContext("traceId", activity?.TraceId.ToString())
-                       .ForContext("spanId", activity?.SpanId.ToString())
+                    workerSpan?.SetTag("messaging.system", "redis");
+                    workerSpan?.SetTag("messaging.destination", "votes");
+
+                    Log.ForContext("traceId", workerSpan?.TraceId.ToString())
+                       .ForContext("spanId", workerSpan?.SpanId.ToString())
                        .Information(
                            "Processing vote {Vote} from voter {Voter}",
                            payload.vote,
                            payload.voter_id);
 
-                    using var sqlActivity =
-                        ActivitySource.StartActivity("PostgreSQL.UpdateVote");
+                    // ----------------------------
+                    // DATABASE SPAN (IMPORTANT)
+                    // ----------------------------
+                    using var dbSpan =
+                        ActivitySource.StartActivity(
+                            "PostgreSQL.UpdateVote",
+                            ActivityKind.Client);
+
+                    dbSpan?.SetTag("db.system", "postgresql");
+                    dbSpan?.SetTag("db.name", "votes");
+                    dbSpan?.SetTag("db.operation", "INSERT/UPDATE");
+                    dbSpan?.SetTag(
+                        "db.statement",
+                        "INSERT INTO votes (id, vote) VALUES ($1,$2) " +
+                        "ON CONFLICT (id) DO UPDATE SET vote=$2");
 
                     UpdateVote(pgsql, payload.voter_id, payload.vote);
                 }
@@ -133,7 +152,7 @@ namespace Worker
                     var conn = new NpgsqlConnection(cs);
                     conn.Open();
 
-                    var cmd = conn.CreateCommand();
+                    using var cmd = conn.CreateCommand();
                     cmd.CommandText =
                         @"CREATE TABLE IF NOT EXISTS votes (
                             id VARCHAR(255) NOT NULL UNIQUE,
