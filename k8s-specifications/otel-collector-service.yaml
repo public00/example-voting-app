@@ -5,14 +5,14 @@ metadata:
   namespace: default
 spec:
   selector:
-    component: otel-collector
+    app: otel-collector
   ports:
-    # Port 4317 for OTLP gRPC (often used by agents/libraries)
+    # Port 4317 for OTLP gRPC (used by applications)
     - name: otlp-grpc
       protocol: TCP
       port: 4317
       targetPort: 4317
-    # Port 4318 for OTLP HTTP (common for many language SDKs)
+    # Port 4318 for OTLP HTTP (used by applications)
     - name: otlp-http
       protocol: TCP
       port: 4318

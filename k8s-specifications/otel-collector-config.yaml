@@ -1,8 +1,9 @@
+# Fix 1: Change namespace to default
 apiVersion: v1
 kind: ConfigMap
 metadata:
   name: otel-collector-config
-  namespace: observability
+  namespace: default
 data:
   otel-collector-config.yaml: |
     receivers:
@@ -19,9 +20,11 @@ data:
 
     exporters:
       otlphttp/dynatrace:
-        endpoint: https://dtu72444.apps.dynatrace.com/api/v2/otlp 
+        # Fix 2: Use an environment variable for the endpoint, defined in the Deployment
+        endpoint: "${env:DT_ENDPOINT_URL}" 
         headers:
-          Authorization: "Api-Token ${DT_API_TOKEN}"
+          # Fix 3: Use an environment variable for the token, defined in the Deployment
+          Authorization: "Api-Token ${env:DT_API_TOKEN}" 
 
     service:
       pipelines:
@@ -30,14 +33,6 @@ data:
             - otlp
           processors:
             - memory_limiter
-            - batch
-          exporters:
-            - otlphttp/dynatrace
-
-        logs:
-          receivers:
-            - otlp
-          processors:
             - batch
           exporters:
             - otlphttp/dynatrace

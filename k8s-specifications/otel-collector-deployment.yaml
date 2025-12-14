@@ -1,8 +1,9 @@
+# Fix 1: Change namespace to default
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: otel-collector
-  namespace: observability
+  namespace: default
 spec:
   replicas: 1
   selector:
@@ -19,17 +20,34 @@ spec:
           args:
             - "--config=/conf/otel-collector-config.yaml"
           env:
+            - name: DT_ENDPOINT_URL
+              valueFrom:
+                secretKeyRef:
+                  name: dynatrace-otlp-secret
+                  key: endpoint_url
+                  namespace: default # Secret is confirmed to be in 'default'
+            
             - name: DT_API_TOKEN
               valueFrom:
                 secretKeyRef:
                   name: dynatrace-otlp-secret
-                  key: DT_API_TOKEN
+                  # Fix 3: Use the correct Secret key name confirmed in earlier steps
+                  key: api_token 
+                  namespace: default # Secret is confirmed to be in 'default'
+
           ports:
             - containerPort: 4318
             - containerPort: 4317
           volumeMounts:
             - name: config
               mountPath: /conf
+          resources:
+            requests:
+              cpu: "50m" # Keep reduced request to avoid Pending status
+              memory: "128Mi"
+            limits:
+              cpu: "100m"
+              memory: "256Mi"
       volumes:
         - name: config
           configMap:
