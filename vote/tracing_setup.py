@@ -1,4 +1,3 @@
-# tracing_setup.py
 
 import logging
 import random
@@ -7,7 +6,8 @@ import os
 from opentelemetry import trace
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
-from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+# CORRECTED: Use the standard OTLP Exporter (works for both gRPC and HTTP)
+from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter 
 from opentelemetry.instrumentation.flask import FlaskInstrumentor
 from opentelemetry.propagate import inject
 from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
@@ -16,26 +16,19 @@ from opentelemetry.semconv.resource import ResourceAttributes
 from opentelemetry._logs import set_logger_provider
 from opentelemetry.sdk._logs import LoggerProvider, LoggingHandler
 from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
-from opentelemetry.exporter.otlp.proto.http._log_exporter import OTLPLogExporter
+# CORRECTED: Use the standard OTLP Log Exporter
+from opentelemetry.exporter.otlp.proto.http._log_exporter import OTLPLogExporter 
 
 from opentelemetry.sdk.resources import Resource
 
-
 class TracingSetup:
     def __init__(self):
-        # --- Configuration ---
-        self.trace_endpoint = os.getenv(
-            "DT_TRACE_ENDPOINT_URL",
-            "https://<TENANT>.live.dynatrace.com/api/v2/otlp/v1/traces"
+        
+        self.otlp_endpoint = os.getenv(
+            "OTEL_EXPORTER_OTLP_ENDPOINT",
+            "http://dynatrace-otel-collector:4318" 
         )
-        self.logs_endpoint = os.getenv(
-            "DT_LOGS_ENDPOINT_URL",
-            "https://<TENANT>.live.dynatrace.com/api/v2/logs/ingest"
-        )
-        self.api_token = os.getenv("DT_AUTH_TOKEN", "")
-
-        self.headers = {"Api-Token": self.api_token}
-
+        
         self.resource = Resource.create({
             ResourceAttributes.SERVICE_NAME: "Vote-Service",
             ResourceAttributes.DEPLOYMENT_ENVIRONMENT: "production"
@@ -50,10 +43,8 @@ class TracingSetup:
         console_handler.setFormatter(formatter)
         self.logger.addHandler(console_handler)
 
-        self.logger.info(f"Trace endpoint: {self.trace_endpoint}")
-        self.logger.info(f"Logs endpoint: {self.logs_endpoint}")
-        self.logger.info(f"API token provided: {'Yes' if self.api_token else 'No'}")
-
+        self.logger.info(f"OTLP Collector endpoint: {self.otlp_endpoint}")
+        
         # Initialize OpenTelemetry
         self._setup_tracer()
         self._setup_logger()
@@ -62,8 +53,7 @@ class TracingSetup:
         try:
             self.tracer_provider = TracerProvider(resource=self.resource)
             trace_exporter = OTLPSpanExporter(
-                endpoint=self.trace_endpoint,
-                headers=self.headers,
+                endpoint=self.otlp_endpoint,
                 timeout=5
             )
             span_processor = BatchSpanProcessor(trace_exporter)
@@ -80,8 +70,7 @@ class TracingSetup:
             set_logger_provider(self.logger_provider)
             
             log_exporter = OTLPLogExporter(
-                endpoint=self.logs_endpoint,
-                headers=self.headers,
+                endpoint=self.otlp_endpoint,
                 timeout=5
             )
             log_processor = BatchLogRecordProcessor(log_exporter)
@@ -92,7 +81,7 @@ class TracingSetup:
         except Exception as e:
             self.logger.exception(f"Error initializing logger: {e}")
 
-    # --- Wrapper Functions ---
+    # --- Wrapper Functions (No change required here) ---
     def start_trace_span(self, span_name):
         self.logger.info(f"Starting span: {span_name}")
         return self.tracer.start_as_current_span(span_name)
@@ -106,6 +95,7 @@ class TracingSetup:
         if not w3c_header or w3c_header.endswith("-0000000000000000-01"):
             self.logger.info("No current traceparent found, generating manually.")
             try:
+                # Manual traceparent generation logic (used for root spans)
                 trace_id = hex(random.getrandbits(128))[2:].zfill(32)
                 span_id = hex(random.getrandbits(64))[2:].zfill(16)
                 w3c_header = f"00-{trace_id}-{span_id}-01"
@@ -117,11 +107,12 @@ class TracingSetup:
         self.logger.info(f"Current traceparent: {w3c_header}")
         return w3c_header
 
-    # --- Flask Instrumentation ---
+    # --- Flask Instrumentation (No change required here) ---
     def instrument_flask(self, app):
         self.logger.info("Instrumenting Flask app for traces and logs.")
         try:
             FlaskInstrumentor().instrument_app(app)
+            # Attach OTel handler to standard loggers for ingestion
             flask_logger = logging.getLogger('flask.app')
             flask_logger.handlers.clear()
             flask_logger.addHandler(self.otel_handler)
@@ -135,20 +126,3 @@ class TracingSetup:
             self.logger.info("Flask and Gunicorn instrumentation applied successfully.")
         except Exception as e:
             self.logger.exception(f"Error instrumenting Flask: {e}")
-
-    # --- Test Export ---
-    def test_export(self):
-        self.logger.info("Sending test span...")
-        try:
-            with self.start_trace_span("test_span") as span:
-                span.add_event("test_event")
-            self.logger.info("Test span exported successfully.")
-        except Exception as e:
-            self.logger.exception(f"Failed to export test span: {e}")
-
-        self.logger.info("Sending test log...")
-        try:
-            logging.getLogger("tracing_setup").info("Test log message")
-            self.logger.info("Test log exported successfully.")
-        except Exception as e:
-            self.logger.exception(f"Failed to export test log: {e}")

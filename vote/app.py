@@ -1,8 +1,7 @@
-# app.py (FINAL CORRECTED VERSION with OTel and Fixed Indentation)
+# app.py (FINAL CORRECTED VERSION with OTel Collector Configuration)
 
 from flask import Flask, jsonify, request, render_template, make_response, g
 from redis import Redis
-# REMOVED: from pythonjsonlogger import jsonlogger
 import json
 import random
 import socket
@@ -13,7 +12,7 @@ import time
 # --- Code-Level Resilience: Fail-Safe Import ---
 try:
     # 1. Import the class itself
-    from tracing_setup import TracingSetup 
+    from tracing_setup import TracingSetup
     
     # 2. Instantiate the class globally
     tracing_config = TracingSetup()
@@ -35,7 +34,7 @@ except ImportError as e:
             def record_exception(self, e): pass
             def set_attribute(self, key, value): pass
         return DummySpan()
-    def instrument_flask(app): pass 
+    def instrument_flask(app): pass
 # ----------------------------------------------------
 
 option_a = os.getenv('OPTION_A', "Cats")
@@ -54,7 +53,6 @@ app.logger.setLevel(logging.INFO)
 
 # --- REDIS CONNECTION FUNCTION ---
 def get_redis():
-    # This block was the source of the IndentationError if its body was missing or misindented.
     if not hasattr(g, 'redis'):
         # NOTE: Assumes a service named 'redis' is resolvable in the K8s cluster
         g.redis = Redis(host="redis", db=0, socket_timeout=5)
@@ -68,7 +66,7 @@ def health():
         app.logger.info("Health check successful") # OTel will capture this log
         return "OK", 200
     except Exception as e:
-        app.logger.error("Health check failed", extra={'error': str(e)}) 
+        app.logger.error("Health check failed", extra={'error': str(e)})
         return "Unhealthy", 500
 
 @app.route("/api/vote", methods=['POST'])
@@ -94,7 +92,7 @@ def cast_vote_api():
             data = json.dumps({
                 'voter_id': voter_id,
                 'vote': vote,
-                'traceparent': traceparent 
+                'traceparent': traceparent
             })
             redis.rpush('votes', data)
 
@@ -103,7 +101,7 @@ def cast_vote_api():
             return resp, 200
 
         except Exception as e:
-            app.logger.error("API Error", extra={'error': str(e)}) 
+            app.logger.error("API Error", extra={'error': str(e)})
             if span:
                 span.record_exception(e)
                 span.set_attribute("error", True)
