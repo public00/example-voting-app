@@ -1,4 +1,3 @@
-
 import logging
 import random
 import os
@@ -6,9 +5,9 @@ import os
 from opentelemetry import trace
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
-# CORRECTED: Use the standard OTLP Exporter (works for both gRPC and HTTP)
 from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter 
 from opentelemetry.instrumentation.flask import FlaskInstrumentor
+from opentelemetry.instrumentation.redis import RedisInstrumentor 
 from opentelemetry.propagate import inject
 from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
 from opentelemetry.semconv.resource import ResourceAttributes
@@ -16,7 +15,6 @@ from opentelemetry.semconv.resource import ResourceAttributes
 from opentelemetry._logs import set_logger_provider
 from opentelemetry.sdk._logs import LoggerProvider, LoggingHandler
 from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
-# CORRECTED: Use the standard OTLP Log Exporter
 from opentelemetry.exporter.otlp.proto.http._log_exporter import OTLPLogExporter 
 
 from opentelemetry.sdk.resources import Resource
@@ -48,6 +46,7 @@ class TracingSetup:
         # Initialize OpenTelemetry
         self._setup_tracer()
         self._setup_logger()
+        self._instrument_libraries() # <-- NEW: Call the instrumentation helper
 
     def _setup_tracer(self):
         try:
@@ -81,7 +80,17 @@ class TracingSetup:
         except Exception as e:
             self.logger.exception(f"Error initializing logger: {e}")
 
-    # --- Wrapper Functions (No change required here) ---
+    # --- NEW: Method to instrument non-web libraries (like Redis) ---
+    def _instrument_libraries(self):
+        self.logger.info("Instrumenting Redis.")
+        try:
+            RedisInstrumentor().instrument() # <-- CRITICAL FIX for Redis Spans
+            self.logger.info("Redis instrumentation applied successfully.")
+        except Exception as e:
+            self.logger.exception(f"Error instrumenting Redis: {e}")
+    # -------------------------------------------------------------
+
+    # --- Wrapper Functions ---
     def start_trace_span(self, span_name):
         self.logger.info(f"Starting span: {span_name}")
         return self.tracer.start_as_current_span(span_name)
@@ -107,7 +116,7 @@ class TracingSetup:
         self.logger.info(f"Current traceparent: {w3c_header}")
         return w3c_header
 
-    # --- Flask Instrumentation (No change required here) ---
+    # --- Flask Instrumentation ---
     def instrument_flask(self, app):
         self.logger.info("Instrumenting Flask app for traces and logs.")
         try:

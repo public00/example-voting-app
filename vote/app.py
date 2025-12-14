@@ -94,6 +94,13 @@ def cast_vote_api():
                 'vote': vote,
                 'traceparent': traceparent
             })
+
+            app.logger.info('Sending to reddis', extra={
+                'vote': vote,
+                'voter_id': voter_id,
+                'traceparent': traceparent
+            })
+            
             redis.rpush('votes', data)
 
             resp = jsonify(success=True, message="Vote cast")
