@@ -28,7 +28,7 @@ data:
       otlphttp/dynatrace:
         # CRITICAL FIX: Restored the full, correct OTLP endpoint URL for Dynatrace.
         # This will prevent the 404 error from the Dynatrace API Gateway.
-        endpoint: "https://dtu72444.apps.dynatrace.com/api/v2/otlp" 
+        endpoint: "https://dtu72444.live.dynatrace.com/api/v2/otlp" 
         headers:
           Authorization: "Api-Token ${env:DT_API_TOKEN}"
       
