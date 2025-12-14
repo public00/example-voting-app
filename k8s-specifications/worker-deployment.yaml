@@ -23,6 +23,11 @@ spec:
           env:
             - name: OTEL_EXPORTER_OTLP_ENDPOINT
               value: "http://dynatrace-otel-collector:4318/v1/traces"
+            - name: DT_API_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: dynatrace-token
+                  key: api-token
           resources:
             requests:
               cpu: "100m"

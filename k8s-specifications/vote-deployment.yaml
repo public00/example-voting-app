@@ -22,11 +22,9 @@ spec:
           ports:
             - name: vote
               containerPort: 80
-
           env:
             - name: OTEL_EXPORTER_OTLP_ENDPOINT
               value: "http://dynatrace-otel-collector:4318/v1/traces"
- 
             - name: DT_API_TOKEN
               valueFrom:
                 secretKeyRef:
