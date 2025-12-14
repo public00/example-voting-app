@@ -1,0 +1,22 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-otel-collector-ingress
+  namespace: default
+spec:
+  # 1. Select the destination pod (the OTel Collector)
+  podSelector:
+    matchLabels:
+      app: otel-collector # Matches the label on your Collector Deployment
+  policyTypes:
+    - Ingress
+  ingress:
+    # 2. Allow traffic from any pod in the namespace
+    - from:
+      - podSelector: {} # Selects ALL pods in the 'default' namespace
+      # 3. On the required OTLP ports
+      ports:
+      - protocol: TCP
+        port: 4317 # OTLP gRPC
+      - protocol: TCP
+        port: 4318 # OTLP HTTP

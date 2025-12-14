@@ -153,10 +153,10 @@ jobs:
             k8s-specifications/result-service.yaml
             k8s-specifications/db-statefulset.yaml
             k8s-specifications/db-service-headless.yaml
-            # k8s-specifications/policy-deny-all.yaml
-            # k8s-specifications/policy-allow-vote-redis.yaml
-            # k8s-specifications/policy-allow-worker.yaml
-            # k8s-specifications/policy-allow-result-db.yaml
+            k8s-specifications/policy-deny-all.yaml
+            k8s-specifications/policy-allow-vote-redis.yaml
+            k8s-specifications/policy-allow-worker.yaml
+            k8s-specifications/policy-allow-result-db.yaml
             k8s-specifications/otel-collector-config.yaml
             k8s-specifications/otel-collector-deployment.yaml
             k8s-specifications/otel-collector-service.yaml
