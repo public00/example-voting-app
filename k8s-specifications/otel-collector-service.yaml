@@ -1,0 +1,20 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: dynatrace-otel-collector
+  namespace: default
+spec:
+  selector:
+    component: otel-collector
+  ports:
+    # Port 4317 for OTLP gRPC (often used by agents/libraries)
+    - name: otlp-grpc
+      protocol: TCP
+      port: 4317
+      targetPort: 4317
+    # Port 4318 for OTLP HTTP (common for many language SDKs)
+    - name: otlp-http
+      protocol: TCP
+      port: 4318
+      targetPort: 4318
+  type: ClusterIP
