@@ -8,10 +8,10 @@ data:
     receivers:
       otlp:
         protocols:
-          http:
-            endpoint: 0.0.0.0:4318
-          grpc:
-            endpoint: 0.0.0.0:4317
+          # Cleaned up: Removed redundant 'endpoint: 0.0.0.0:4318' definitions, 
+          # using defaults which are 0.0.0.0:4318 (http) and 0.0.0.0:4317 (grpc)
+          http: {}
+          grpc: {}
 
     processors:
       memory_limiter:
@@ -26,7 +26,9 @@ data:
 
     exporters:
       otlphttp/dynatrace:
-        endpoint: "endpoint: "https://dtu72444.apps.dynatrace.com"
+        # CRITICAL FIX: Restored the full, correct OTLP endpoint URL for Dynatrace.
+        # This will prevent the 404 error from the Dynatrace API Gateway.
+        endpoint: "https://dtu72444.apps.dynatrace.com/api/v2/otlp" 
         headers:
           Authorization: "Api-Token ${env:DT_API_TOKEN}"
       
