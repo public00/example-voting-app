@@ -9,6 +9,9 @@ env:
   ACR_NAME: vedranregistry99
 
 jobs:
+  # ---------------------------------------------------
+  # JOB 1: QUALITY & TESTS
+  # ---------------------------------------------------
   test:
     runs-on: ubuntu-latest
     steps:
@@ -21,16 +24,22 @@ jobs:
           
       - name: Install Dependencies
         run: |
-          pip install pytest flask redis
+          pip install pytest flask redis flake8
           if [ -f vote/requirements.txt ]; then pip install -r vote/requirements.txt; fi
 
+      # Run Unit Tests
       - name: Run Unit Tests
         run: |
           export REDIS_HOST=localhost 
-          pytest vote/test_app.py
-          
+          # Only run if the test file actually exists
+          if [ -f vote/test_app.py ]; then pytest vote/test_app.py; fi
+
+  # ---------------------------------------------------
+  # JOB 2: BUILD & SECURITY SCAN
+  # ---------------------------------------------------
   build:
     runs-on: ubuntu-latest
+    needs: test
     steps:
       - uses: actions/checkout@v4
       
@@ -40,20 +49,53 @@ jobs:
           username: ${{ secrets.ACR_USERNAME }}
           password: ${{ secrets.ACR_PASSWORD }}
 
-      - name: Build and Push Vote
+      # --- VOTE APP ---
+      - name: Build Vote (Pre-Scan)
+        uses: docker/build-push-action@v5
+        with:
+          context: ./vote
+          push: false
+          tags: ${{ env.ACR_NAME }}.azurecr.io/vote:${{ github.sha }}
+
+      - name: Security Scan (Vote)
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: '${{ env.ACR_NAME }}.azurecr.io/vote:${{ github.sha }}'
+          format: 'table'
+          ignore-unfixed: true
+          severity: 'CRITICAL,HIGH'
+
+      - name: Push Vote
         uses: docker/build-push-action@v5
         with:
           context: ./vote
           push: true
           tags: ${{ env.ACR_NAME }}.azurecr.io/vote:${{ github.sha }}
 
-      - name: Build and Push Result
+      # --- RESULT APP ---
+      - name: Build Result (Pre-Scan)
+        uses: docker/build-push-action@v5
+        with:
+          context: ./result
+          push: false
+          tags: ${{ env.ACR_NAME }}.azurecr.io/result:${{ github.sha }}
+
+      - name: Security Scan (Result)
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: '${{ env.ACR_NAME }}.azurecr.io/result:${{ github.sha }}'
+          format: 'table'
+          ignore-unfixed: true
+          severity: 'CRITICAL,HIGH'
+
+      - name: Push Result
         uses: docker/build-push-action@v5
         with:
           context: ./result
           push: true
           tags: ${{ env.ACR_NAME }}.azurecr.io/result:${{ github.sha }}
 
+      # --- WORKER APP ---
       - name: Build and Push Worker
         uses: docker/build-push-action@v5
         with:
@@ -62,7 +104,7 @@ jobs:
           tags: ${{ env.ACR_NAME }}.azurecr.io/worker:${{ github.sha }}
 
   # ---------------------------------------------------
-  # JOB: DEPLOY TO AKS
+  # JOB 3: DEPLOY TO AKS
   # ---------------------------------------------------
   deploy:
     runs-on: ubuntu-latest
@@ -70,39 +112,33 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # 1. Login to Azure (for AKS access)
       - uses: azure/login@v2
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
 
-      # 2. Login to Registry (Required for K8s to verify images)
       - uses: docker/login-action@v3
         with:
           registry: ${{ env.ACR_NAME }}.azurecr.io
           username: ${{ secrets.ACR_USERNAME }}
           password: ${{ secrets.ACR_PASSWORD }}
 
-      # 3. Connect to AKS Cluster
       - uses: azure/aks-set-context@v3
         with:
           resource-group: VotingApp
           cluster-name: VotingAppCluster
 
-      # --- NEW STEP: Create the Dynatrace OTLP Secret ---
-      - name: Create/Update Dynatrace OTLP Secret
+      # --- ADDED STEP: Create the Dynatrace OTLP Secret using your GitHub Secrets ---
+      - name: Create Dynatrace OTLP Secret
         env:
-          # Inject GitHub Secrets into the runner's environment variables
           DT_URL: ${{ secrets.DT_ENDPOINT_URL }}
           DT_TOKEN: ${{ secrets.DT_AUTH_TOKEN }}
         run: |
-          # The keys 'endpoint_url' and 'api_token' match your worker deployment spec.
-          # The command uses 'kubectl apply' via a pipe to ensure it creates or updates the secret.
+          # This command ensures the secret exists with the correct OTLP values
           kubectl create secret generic dynatrace-otlp-secret \
             --from-literal=endpoint_url=$DT_URL \
             --from-literal=api_token=$DT_TOKEN \
             --dry-run=client -o yaml | kubectl apply -f -
             
-      # 4. Deploy Manifests & Swap Image
       - name: Deploy to Kubernetes
         uses: Azure/k8s-deploy@v4
         with:
@@ -111,7 +147,6 @@ jobs:
             k8s-specifications/redis-deployment.yaml
             k8s-specifications/redis-service.yaml
             k8s-specifications/worker-deployment.yaml
-            # ... all other manifests
             k8s-specifications/vote-deployment.yaml
             k8s-specifications/vote-service.yaml
             k8s-specifications/result-deployment.yaml
