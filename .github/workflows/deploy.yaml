@@ -7,18 +7,20 @@ on:
 
 env:
   ACR_NAME: vedranregistry99
+  IMAGE_TAG: ${{ github.sha }} 
+
+permissions:
+  contents: read
+  id-token: write
 
 jobs:
-  # ---------------------------------------------------
-  # JOB 1: QUALITY & TESTS
-  # ---------------------------------------------------
   test:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       
       - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
           python-version: '3.9'
           
@@ -27,121 +29,88 @@ jobs:
           pip install pytest flask redis flake8
           if [ -f vote/requirements.txt ]; then pip install -r vote/requirements.txt; fi
 
-      # [NEW] LINTING STEP
-      # Checks for syntax errors and style issues in the Python code
       - name: Lint with Flake8
         run: |
-          # stop the build if there are Python syntax errors or undefined names
           flake8 vote/ --count --select=E9,F63,F7,F82 --show-source --statistics
-          # exit-zero treats all errors as warnings. The GitHub editor is 127 chars wide
           flake8 vote/ --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
 
-      # Run Unit Tests
       - name: Run Unit Tests
         run: |
           export REDIS_HOST=localhost 
-          # Only run if the test file actually exists
           if [ -f vote/test_app.py ]; then pytest vote/test_app.py; fi
 
-  # ---------------------------------------------------
-  # JOB 2: BUILD & SECURITY SCAN
-  # ---------------------------------------------------
-  build:
+  build_and_scan:
     runs-on: ubuntu-latest
-    needs: test  # Only build if tests pass
+    needs: test
+    strategy:
+      matrix:
+        app: [vote, result, worker]
+    
     steps:
       - uses: actions/checkout@v4
       
-      - uses: docker/login-action@v3
+      - name: Docker Login to ACR
+        uses: docker/login-action@v3
         with:
           registry: ${{ env.ACR_NAME }}.azurecr.io
           username: ${{ secrets.ACR_USERNAME }}
           password: ${{ secrets.ACR_PASSWORD }}
 
-      # --- VOTE APP ---
-      # 1. Build locally first to scan it
-      - name: Build Vote (Pre-Scan)
+      - name: Build ${{ matrix.app }} Image (Pre-Scan)
+        id: build-image
         uses: docker/build-push-action@v5
         with:
-          context: ./vote
+          context: ./${{ matrix.app }}
           push: false
-          tags: ${{ env.ACR_NAME }}.azurecr.io/vote:${{ github.sha }}
+          tags: ${{ env.ACR_NAME }}.azurecr.io/${{ matrix.app }}:${{ env.IMAGE_TAG }}
 
-      # 2. [NEW] Security Scan with Trivy
-      - name: Security Scan (Vote)
+      - name: Security Scan (${{ matrix.app }}) with Trivy
+        if: ${{ matrix.app == 'vote' || matrix.app == 'result' }}
         uses: aquasecurity/trivy-action@master
         with:
-          image-ref: '${{ env.ACR_NAME }}.azurecr.io/vote:${{ github.sha }}'
-          format: 'table'
-          # exit-code: '1' # Uncomment this to Fail the build on critical bugs
-          ignore-unfixed: true
-          severity: 'CRITICAL,HIGH'
-
-      # 3. Push to Registry (Only if scan "passes" or we ignore it)
-      - name: Push Vote
-        uses: docker/build-push-action@v5
-        with:
-          context: ./vote
-          push: true
-          tags: ${{ env.ACR_NAME }}.azurecr.io/vote:${{ github.sha }}
-
-      # --- RESULT APP ---
-      - name: Build Result (Pre-Scan)
-        uses: docker/build-push-action@v5
-        with:
-          context: ./result
-          push: false
-          tags: ${{ env.ACR_NAME }}.azurecr.io/result:${{ github.sha }}
-
-      - name: Security Scan (Result)
-        uses: aquasecurity/trivy-action@master
-        with:
-          image-ref: '${{ env.ACR_NAME }}.azurecr.io/result:${{ github.sha }}'
+          image-ref: ${{ steps.build-image.outputs.tag }}
           format: 'table'
           ignore-unfixed: true
           severity: 'CRITICAL,HIGH'
 
-      - name: Push Result
+      - name: Push ${{ matrix.app }} Image to ACR
         uses: docker/build-push-action@v5
         with:
-          context: ./result
+          context: ./${{ matrix.app }}
           push: true
-          tags: ${{ env.ACR_NAME }}.azurecr.io/result:${{ github.sha }}
+          tags: ${{ env.ACR_NAME }}.azurecr.io/${{ matrix.app }}:${{ env.IMAGE_TAG }}
 
-      # --- WORKER APP ---
-      # (Worker is skipped for scanning to save time, but follows same pattern)
-      - name: Build and Push Worker
-        uses: docker/build-push-action@v5
-        with:
-          context: ./worker
-          push: true
-          tags: ${{ env.ACR_NAME }}.azurecr.io/worker:${{ github.sha }}
-
-  # ---------------------------------------------------
-  # JOB 3: DEPLOY TO AKS
-  # ---------------------------------------------------
   deploy:
     runs-on: ubuntu-latest
-    needs: build
+    needs: build_and_scan
     steps:
       - uses: actions/checkout@v4
 
-      - uses: azure/login@v2
+      - name: Azure Login
+        uses: azure/login@v2
         with:
-          creds: ${{ secrets.AZURE_CREDENTIALS }}
-
-      - uses: docker/login-action@v3
-        with:
-          registry: ${{ env.ACR_NAME }}.azurecr.io
-          username: ${{ secrets.ACR_USERNAME }}
-          password: ${{ secrets.ACR_PASSWORD }}
-
-      - uses: azure/aks-set-context@v3
+          creds: ${{ secrets.AZURE_CREDENTIALS }} 
+          
+      - name: Set AKS Context
+        uses: azure/aks-set-context@v3
         with:
           resource-group: VotingApp
           cluster-name: VotingAppCluster
 
-      - name: Deploy to Kubernetes
+      # --- This is the new step for Secret Management (The focus of our previous conversation) ---
+      - name: Create/Update Dynatrace OTLP Secret
+        env:
+          DT_URL: ${{ secrets.DT_ENDPOINT_URL }}
+          DT_TOKEN: ${{ secrets.DT_AUTH_TOKEN }}
+        run: |
+          # Ensure kubectl is available (usually is with azure/aks-set-context)
+          kubectl delete secret dynatrace-otlp-secret --ignore-not-found=true
+          kubectl create secret generic dynatrace-otlp-secret \
+            --from-literal=endpoint_url=$DT_URL \
+            --from-literal=api_token=$DT_TOKEN \
+            --dry-run=client -o yaml | kubectl apply -f -
+
+      - name: Deploy Manifests to Kubernetes
         uses: Azure/k8s-deploy@v4
         with:
           action: deploy
@@ -160,6 +129,6 @@ jobs:
             k8s-specifications/policy-allow-worker.yaml
             k8s-specifications/policy-allow-result-db.yaml
           images: |
-            ${{ env.ACR_NAME }}.azurecr.io/vote:${{ github.sha }}
-            ${{ env.ACR_NAME }}.azurecr.io/result:${{ github.sha }}
-            ${{ env.ACR_NAME }}.azurecr.io/worker:${{ github.sha }}
+            ${{ env.ACR_NAME }}.azurecr.io/vote:${{ env.IMAGE_TAG }}
+            ${{ env.ACR_NAME }}.azurecr.io/result:${{ env.IMAGE_TAG }}
+            ${{ env.ACR_NAME }}.azurecr.io/worker:${{ env.IMAGE_TAG }}
