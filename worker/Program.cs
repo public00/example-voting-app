@@ -28,12 +28,11 @@ namespace Worker
         public static int Main(string[] args)
         {
             // --- Dynatrace OTLP settings ---
-            var endpointUrl = Environment.GetEnvironmentVariable("DT_ENDPOINT_URL") 
+            var endpointUrl = Environment.GetEnvironmentVariable("OTEL_EXPORTER_OTLP_ENDPOINT") 
                   ?? "http://dynatrace-otel-collector:4318";
 
-            Console.WriteLine("DT_ENDPOINT_URL:" + Environment.GetEnvironmentVariable("DT_ENDPOINT_URL"));
-            Console.WriteLine("OTEL_EXPORTER_OTLP_ENDPOINT:" + Environment.GetEnvironmentVariable("OTEL_EXPORTER_OTLP_ENDPOINT"));
-      
+            Console.WriteLine("URL is:" + endpointUrl);
+            
             var apiToken = Environment.GetEnvironmentVariable("DT_API_TOKEN");
 
             // --- OpenTelemetry Tracer ---
