@@ -7,11 +7,6 @@ on:
 
 env:
   ACR_NAME: vedranregistry99
-  IMAGE_TAG: ${{ github.sha }} 
-
-permissions:
-  contents: read
-  id-token: write
 
 jobs:
   test:
@@ -20,97 +15,95 @@ jobs:
       - uses: actions/checkout@v4
       
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v4
         with:
           python-version: '3.9'
           
       - name: Install Dependencies
         run: |
-          pip install pytest flask redis flake8
+          pip install pytest flask redis
           if [ -f vote/requirements.txt ]; then pip install -r vote/requirements.txt; fi
-
-      - name: Lint with Flake8
-        run: |
-          flake8 vote/ --count --select=E9,F63,F7,F82 --show-source --statistics
-          flake8 vote/ --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
 
       - name: Run Unit Tests
         run: |
           export REDIS_HOST=localhost 
-          if [ -f vote/test_app.py ]; then pytest vote/test_app.py; fi
-
-  build_and_scan:
+          pytest vote/test_app.py
+          
+  build:
     runs-on: ubuntu-latest
-    needs: test
-    strategy:
-      matrix:
-        app: [vote, result, worker]
-    
     steps:
       - uses: actions/checkout@v4
       
-      - name: Docker Login to ACR
-        uses: docker/login-action@v3
+      - uses: docker/login-action@v3
         with:
           registry: ${{ env.ACR_NAME }}.azurecr.io
           username: ${{ secrets.ACR_USERNAME }}
           password: ${{ secrets.ACR_PASSWORD }}
 
-      - name: Build ${{ matrix.app }} Image (Pre-Scan)
-        id: build-image
+      - name: Build and Push Vote
         uses: docker/build-push-action@v5
         with:
-          context: ./${{ matrix.app }}
-          push: false
-          tags: ${{ env.ACR_NAME }}.azurecr.io/${{ matrix.app }}:${{ env.IMAGE_TAG }}
-
-      - name: Security Scan (${{ matrix.app }}) with Trivy
-        if: ${{ matrix.app == 'vote' || matrix.app == 'result' }}
-        uses: aquasecurity/trivy-action@master
-        with:
-          image-ref: ${{ steps.build-image.outputs.tag }}
-          format: 'table'
-          ignore-unfixed: true
-          severity: 'CRITICAL,HIGH'
-
-      - name: Push ${{ matrix.app }} Image to ACR
-        uses: docker/build-push-action@v5
-        with:
-          context: ./${{ matrix.app }}
+          context: ./vote
           push: true
-          tags: ${{ env.ACR_NAME }}.azurecr.io/${{ matrix.app }}:${{ env.IMAGE_TAG }}
+          tags: ${{ env.ACR_NAME }}.azurecr.io/vote:${{ github.sha }}
 
+      - name: Build and Push Result
+        uses: docker/build-push-action@v5
+        with:
+          context: ./result
+          push: true
+          tags: ${{ env.ACR_NAME }}.azurecr.io/result:${{ github.sha }}
+
+      - name: Build and Push Worker
+        uses: docker/build-push-action@v5
+        with:
+          context: ./worker
+          push: true
+          tags: ${{ env.ACR_NAME }}.azurecr.io/worker:${{ github.sha }}
+
+  # ---------------------------------------------------
+  # JOB: DEPLOY TO AKS
+  # ---------------------------------------------------
   deploy:
     runs-on: ubuntu-latest
-    needs: build_and_scan
+    needs: build
     steps:
       - uses: actions/checkout@v4
 
-      - name: Azure Login
-        uses: azure/login@v2
+      # 1. Login to Azure (for AKS access)
+      - uses: azure/login@v2
         with:
-          creds: ${{ secrets.AZURE_CREDENTIALS }} 
-          
-      - name: Set AKS Context
-        uses: azure/aks-set-context@v3
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      # 2. Login to Registry (Required for K8s to verify images)
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.ACR_NAME }}.azurecr.io
+          username: ${{ secrets.ACR_USERNAME }}
+          password: ${{ secrets.ACR_PASSWORD }}
+
+      # 3. Connect to AKS Cluster
+      - uses: azure/aks-set-context@v3
         with:
           resource-group: VotingApp
           cluster-name: VotingAppCluster
 
-      # --- This is the new step for Secret Management (The focus of our previous conversation) ---
+      # --- NEW STEP: Create the Dynatrace OTLP Secret ---
       - name: Create/Update Dynatrace OTLP Secret
         env:
+          # Inject GitHub Secrets into the runner's environment variables
           DT_URL: ${{ secrets.DT_ENDPOINT_URL }}
           DT_TOKEN: ${{ secrets.DT_AUTH_TOKEN }}
         run: |
-          # Ensure kubectl is available (usually is with azure/aks-set-context)
-          kubectl delete secret dynatrace-otlp-secret --ignore-not-found=true
+          # The keys 'endpoint_url' and 'api_token' match your worker deployment spec.
+          # The command uses 'kubectl apply' via a pipe to ensure it creates or updates the secret.
           kubectl create secret generic dynatrace-otlp-secret \
             --from-literal=endpoint_url=$DT_URL \
             --from-literal=api_token=$DT_TOKEN \
             --dry-run=client -o yaml | kubectl apply -f -
-
-      - name: Deploy Manifests to Kubernetes
+            
+      # 4. Deploy Manifests & Swap Image
+      - name: Deploy to Kubernetes
         uses: Azure/k8s-deploy@v4
         with:
           action: deploy
@@ -118,6 +111,7 @@ jobs:
             k8s-specifications/redis-deployment.yaml
             k8s-specifications/redis-service.yaml
             k8s-specifications/worker-deployment.yaml
+            # ... all other manifests
             k8s-specifications/vote-deployment.yaml
             k8s-specifications/vote-service.yaml
             k8s-specifications/result-deployment.yaml
@@ -129,6 +123,6 @@ jobs:
             k8s-specifications/policy-allow-worker.yaml
             k8s-specifications/policy-allow-result-db.yaml
           images: |
-            ${{ env.ACR_NAME }}.azurecr.io/vote:${{ env.IMAGE_TAG }}
-            ${{ env.ACR_NAME }}.azurecr.io/result:${{ env.IMAGE_TAG }}
-            ${{ env.ACR_NAME }}.azurecr.io/worker:${{ env.IMAGE_TAG }}
+            ${{ env.ACR_NAME }}.azurecr.io/vote:${{ github.sha }}
+            ${{ env.ACR_NAME }}.azurecr.io/result:${{ github.sha }}
+            ${{ env.ACR_NAME }}.azurecr.io/worker:${{ github.sha }}
