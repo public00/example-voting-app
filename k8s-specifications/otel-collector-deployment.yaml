@@ -19,14 +19,12 @@ spec:
           args:
             - "--config=/conf/otel-collector-config.yaml"
           env:
-            # FIX 1: Removed 'namespace: default' line
             - name: DT_ENDPOINT_URL
               valueFrom:
                 secretKeyRef:
                   name: dynatrace-otlp-secret
                   key: endpoint_url
             
-            # FIX 2: Removed 'namespace: default' line and ensured key name is 'api_token'
             - name: DT_API_TOKEN
               valueFrom:
                 secretKeyRef:

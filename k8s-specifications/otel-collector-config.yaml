@@ -21,7 +21,7 @@ data:
 
     exporters:
       otlphttp/dynatrace:
-        endpoint: "https://dtu72444.apps.dynatrace.com/api/v2"
+        endpoint: "https://dtu72444.apps.dynatrace.com/api/v2/otlp"
         headers:
           Authorization: "Api-Token ${env:DT_API_TOKEN}" 
 
