@@ -11,7 +11,6 @@ using Serilog;
 using Serilog.Formatting.Json;
 using StackExchange.Redis;
 
-// OpenTelemetry
 using OpenTelemetry;
 using OpenTelemetry.Trace;
 using OpenTelemetry.Resources;
@@ -87,9 +86,7 @@ namespace Worker
                     var payload =
                         JsonConvert.DeserializeObject<VotePayload>(json);
 
-                    // ----------------------------
-                    // TRACE CONTEXT CONTINUATION
-                    // ----------------------------
+                    // Trace context
                     ActivityContext parentContext = default;
 
                     if (!string.IsNullOrEmpty(payload.traceparent)
@@ -117,9 +114,7 @@ namespace Worker
                            payload.vote,
                            payload.voter_id);
 
-                    // ----------------------------
-                    // DATABASE SPAN (IMPORTANT)
-                    // ----------------------------
+                    // DB span
                     using var dbSpan =
                         ActivitySource.StartActivity(
                             "PostgreSQL.UpdateVote",

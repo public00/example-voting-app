@@ -46,7 +46,7 @@ class TracingSetup:
         # Initialize OpenTelemetry
         self._setup_tracer()
         self._setup_logger()
-        self._instrument_libraries() # <-- NEW: Call the instrumentation helper
+        self._instrument_libraries()
 
     def _setup_tracer(self):
         try:
@@ -80,17 +80,16 @@ class TracingSetup:
         except Exception as e:
             self.logger.exception(f"Error initializing logger: {e}")
 
-    # --- NEW: Method to instrument non-web libraries (like Redis) ---
+    # INnstrument non-web libraries (like Redis) ---
     def _instrument_libraries(self):
         self.logger.info("Instrumenting Redis.")
         try:
-            RedisInstrumentor().instrument() # <-- CRITICAL FIX for Redis Spans
+            RedisInstrumentor().instrument() # add redis spans
             self.logger.info("Redis instrumentation applied successfully.")
         except Exception as e:
             self.logger.exception(f"Error instrumenting Redis: {e}")
     # -------------------------------------------------------------
 
-    # --- Wrapper Functions ---
     def start_trace_span(self, span_name):
         self.logger.info(f"Starting span: {span_name}")
         return self.tracer.start_as_current_span(span_name)
@@ -104,7 +103,6 @@ class TracingSetup:
         if not w3c_header or w3c_header.endswith("-0000000000000000-01"):
             self.logger.info("No current traceparent found, generating manually.")
             try:
-                # Manual traceparent generation logic (used for root spans)
                 trace_id = hex(random.getrandbits(128))[2:].zfill(32)
                 span_id = hex(random.getrandbits(64))[2:].zfill(16)
                 w3c_header = f"00-{trace_id}-{span_id}-01"
@@ -116,12 +114,10 @@ class TracingSetup:
         self.logger.info(f"Current traceparent: {w3c_header}")
         return w3c_header
 
-    # --- Flask Instrumentation ---
     def instrument_flask(self, app):
         self.logger.info("Instrumenting Flask app for traces and logs.")
         try:
             FlaskInstrumentor().instrument_app(app)
-            # Attach OTel handler to standard loggers for ingestion
             flask_logger = logging.getLogger('flask.app')
             flask_logger.handlers.clear()
             flask_logger.addHandler(self.otel_handler)

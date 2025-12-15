@@ -9,15 +9,12 @@ import os
 import logging
 import time
 
-# --- Code-Level Resilience: Fail-Safe Import ---
 try:
-    # 1. Import the class itself
     from tracing_setup import TracingSetup
-    
-    # 2. Instantiate the class globally
+    # Initialize tracing and logging setup
     tracing_config = TracingSetup()
     
-    # 3. Assign the instance methods to the global names used throughout app.py
+    # Assign the instance methods to the global names used throughout app.py
     get_current_traceparent = tracing_config.get_current_traceparent
     start_trace_span = tracing_config.start_trace_span
     instrument_flask = tracing_config.instrument_flask
@@ -25,7 +22,6 @@ try:
 except ImportError as e:
     print(f"FATAL: Tracing setup failed: {e}. Running without distributed tracing/logging.")
     
-    # (Dummy functions for resilience)
     def get_current_traceparent(): return None
     def start_trace_span(span_name, kind=None):
         class DummySpan:
@@ -43,18 +39,13 @@ hostname = socket.gethostname()
 
 app = Flask(__name__)
 
-# --- NEW: Call the Instrumentation Hook (Handles all OTel setup now) ---
+# Call the Instrumentation Hook - OpenTelementry
 instrument_flask(app)
 # ----------------------------------------
-
-# --- LOGGING SETUP (SIMPLIFIED) ---
 app.logger.setLevel(logging.INFO)
 # ---------------------------------
-
-# --- REDIS CONNECTION FUNCTION ---
 def get_redis():
     if not hasattr(g, 'redis'):
-        # NOTE: Assumes a service named 'redis' is resolvable in the K8s cluster
         g.redis = Redis(host="redis", db=0, socket_timeout=5)
     return g.redis
 
@@ -63,7 +54,7 @@ def health():
     try:
         redis = get_redis()
         redis.ping()
-        app.logger.info("Health check successful") # OTel will capture this log
+        app.logger.info("Health check successful")
         return "OK", 200
     except Exception as e:
         app.logger.error("Health check failed", extra={'error': str(e)})
